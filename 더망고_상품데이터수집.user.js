@@ -13,6 +13,7 @@
 
 var LS_RUN='tmg_auto_v3';       // 실행 상태(진행중/phase/index)
 var LS_DATA='tmg_data_v3';      // 엑셀에서 불러온 데이터
+var LS_BW='tmg_banword_v3';     // 선택된 금지어 템플릿 value(리로드 넘어 유지)
 
 var SITE_LABEL={a_rt:'ABC마트', zara_de:'독일자라', zara_kr:'자라KR', musinsa:'무신사', ebay:'eBay'};
 var LABEL_TO_CODE={'ABC마트':'a_rt','독일자라':'zara_de','자라KR':'zara_kr','ZaraKR':'zara_kr','Zara KR':'zara_kr','무신사':'musinsa','MUSINSA':'musinsa','eBay':'ebay','ebay':'ebay'};
@@ -21,6 +22,8 @@ function gs(){ try{return JSON.parse(localStorage.getItem(LS_RUN))||{};}catch(e)
 function ss(s){ localStorage.setItem(LS_RUN, JSON.stringify(s)); }
 function loadData(){ try{return JSON.parse(localStorage.getItem(LS_DATA))||{};}catch(e){return {};} }
 function saveData(d){ localStorage.setItem(LS_DATA, JSON.stringify(d)); }
+function getBW(){ return localStorage.getItem(LS_BW)||''; }
+function setBW(v){ localStorage.setItem(LS_BW, v||''); }
 function sleep(ms){ return new Promise(function(r){ setTimeout(r,ms); }); }
 function q(s){ return document.querySelector(s); }
 function txt(){ return document.body.innerText||''; }
@@ -99,13 +102,14 @@ function handleFile(file){
 
 // ---------- 패널 ----------
 function ui(){
-  if(q('#tmgPanel')){ render(); renderButtons(); return; }
+  if(q('#tmgPanel')){ render(); renderButtons(); renderBanword(); return; }
   var p=document.createElement('div'); p.id='tmgPanel';
   p.style.cssText='position:fixed;top:10px;right:10px;z-index:2147483647;background:#fff;border:2px solid #d9534f;border-radius:8px;padding:10px 12px;width:260px;font:12px/1.5 "맑은 고딕",sans-serif;box-shadow:0 2px 10px rgba(0,0,0,.25)';
   p.innerHTML='<div style="font-weight:bold;margin-bottom:6px">더망고 자동수집 v3 (엑셀연동)</div>'
    +'<div id="tmgStat" style="margin-bottom:8px;color:#333;min-height:20px"></div>'
    +'<button id="tmgLoad">엑셀 불러오기(.xlsx)</button>'
    +'<input type="file" id="tmgFile" accept=".xlsx" style="display:none">'
+   +'<div style="margin:8px 0 4px"><label style="display:block;color:#333;margin-bottom:2px">금지어 템플릿</label><select id="tmgBanword" style="width:100%;box-sizing:border-box"></select></div>'
    +'<div id="tmgSites" style="margin:8px 0"></div>'
    +'<div style="margin-bottom:6px"><label><input type="checkbox" id="tmgSkip" checked> 기존 필터 건너뛰기</label></div>'
    +'<button id="tmgResume">이어서</button> '
@@ -113,9 +117,28 @@ function ui(){
   document.body.appendChild(p);
   q('#tmgLoad').onclick=function(){ q('#tmgFile').click(); };
   q('#tmgFile').onchange=function(e){ if(e.target.files&&e.target.files[0]) handleFile(e.target.files[0]); };
+  q('#tmgBanword').onchange=function(e){ setBW(e.target.value); };
   q('#tmgResume').onclick=function(){ resume(); };
   q('#tmgStop').onclick=function(){ var s=gs(); s.running=false; ss(s); render(); alert('정지했습니다.'); };
-  render(); renderButtons();
+  render(); renderButtons(); renderBanword();
+}
+// 저장 레이어의 라이브 금지어 템플릿 목록(#goods_limit_templet)을 읽어 패널 드롭박스에 채움.
+// 템플릿이 추가되면 자동 반영. 이전 선택값은 localStorage에서 복원.
+function renderBanword(){
+  var box=q('#tmgBanword'); if(!box) return;
+  var src=document.getElementById('goods_limit_templet');
+  var cur=getBW();
+  var opts='<option value="">금지어 미적용</option>';
+  if(src){
+    Array.prototype.slice.call(src.options).forEach(function(o){
+      if(!o.value) return; // 사이트 placeholder 제외
+      var t=(o.text||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+      opts+='<option value="'+o.value+'">'+t+'</option>';
+    });
+  }
+  box.innerHTML=opts;
+  box.value=cur;
+  if(box.value!==cur){ box.value=''; setBW(''); } // 저장돼있던 템플릿이 사라졌으면 미적용으로
 }
 function renderButtons(){
   var box=q('#tmgSites'); if(!box) return;
@@ -188,6 +211,9 @@ async function loop(){
     await waitFor(function(){ var f=q('#filter_name'); return f && f.offsetParent!==null; }, 20000, 500, '저장 팝업');
     q('#filter_name').value=row2.name;
     var lc=q('#limit_count'); if(lc) lc.value='3';
+    // 금지어 템플릿 적용(선택된 경우만). 저장 레이어의 select 값 세팅 + change(show_area) 트리거.
+    var bw=getBW();
+    if(bw){ var bwSel=q('#goods_limit_templet'); if(bwSel){ bwSel.value=bw; try{ bwSel.dispatchEvent(new Event('change',{bubbles:true})); }catch(e){} } }
     await sleep(400);
     var saveBtn=q('.btn-layerSave')||aByText('저장하기'); if(!saveBtn) throw new Error('저장하기 버튼을 찾지 못함');
     saveBtn.click();
