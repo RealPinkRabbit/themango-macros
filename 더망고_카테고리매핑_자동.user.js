@@ -1,0 +1,401 @@
+// ==UserScript==
+// @name         더망고 카테고리매핑 자동(필터 순차 + 규칙기반 검수)
+// @namespace    solddeul.tmg
+// @version      1.0
+// @description  검색필터 세부설정의 (오픈)마켓 카테고리 매핑을 자동화. 각 필터: 설정열기(admin_category_set.php)→AI자동매핑→11개 마켓을 규칙(금지어/브랜드 회피·성별 일치·11번가 해외+고시=의류)으로 재선택→fetch-POST 저장→다음. Zara(독일자라) 미매핑 필터만 대상. localStorage로 새로고침을 넘어 진행. 테스트(저장 안 함) 모드 지원. 팝업창은 건드리지 않음.
+// @match        https://tmg4682.mycafe24.com/mall/admin/admin_group.php*
+// @match        https://tmg4682.mycafe24.com/mall/admin/admin_category_set.php*
+// @run-at       document-start
+// @grant        none
+// ==/UserScript==
+(function(){
+'use strict';
+
+// ---- 네이티브 대화상자 무력화(자동매핑/저장검증이 alert로 렌더러를 멈추는 것 방지) ----
+var _alerts=[];
+try{ window.alert=function(m){ _alerts.push(String(m)); }; }catch(e){}
+try{ window.confirm=function(){ return true; }; }catch(e){}
+
+var LS='tmg_catmap_v1';           // {running, dry, idx, ok, fail, skip, max, queue:[{id,name}], log:[]}
+var MARKETS=['AUC20','GMK20','11ST','SMART','COUP','LTON','LFMALL','MUSTIT','SHOPEE','QOO10JP','PLAYAUTO'];
+var MLABEL={AUC20:'옥션',GMK20:'G마켓','11ST':'11번가',SMART:'스마트스토어',COUP:'쿠팡',LTON:'롯데ON',LFMALL:'LF몰',MUSTIT:'머스트잇',SHOPEE:'쇼피',QOO10JP:'큐텐JP',PLAYAUTO:'플레이오토'};
+var FORBIDDEN=/(어린이|유아|아동|도서|서적|e쿠폰|모바일쿠폰|모바일상품권|렌탈|렌터카|배달음식|출산|육아|임산부|임부|위생용품|의료기기|의약품)/;
+
+function gs(){ try{ return JSON.parse(localStorage.getItem(LS))||null; }catch(e){ return null; } }
+function ss(s){ localStorage.setItem(LS, JSON.stringify(s)); }
+function clr(){ localStorage.removeItem(LS); }
+function sleep(ms){ return new Promise(function(r){ setTimeout(r,ms); }); }
+function q(s){ return document.querySelector(s); }
+function DIR(){ return location.pathname.replace(/[^/]+$/,''); }
+
+// =========================================================================
+// 분류 & 키워드 (상품유형 → 검색 키워드). 필터이름에서 성별/의류대분류 추출.
+// =========================================================================
+function classify(name){
+  var g = name.indexOf('여성')>=0 ? 'W' : (name.indexOf('남성')>=0 ? 'M' : 'U');
+  var gk = g==='W' ? '여성' : (g==='M' ? '남성' : '');
+  var n = name;
+  var base;
+  if(/가방/.test(n)) base='가방';
+  else if(/애슬레틱/.test(n)){ base = /신발/.test(n)?'스니커즈' : (/트레이닝/.test(n)?'트레이닝' : (/양말|타이츠/.test(n)?'양말':'트레이닝')); }
+  else if(/신발|스니커즈/.test(n)) base='스니커즈';
+  else if(/수영복|비치웨어/.test(n)){ base = /가방/.test(n)?'가방':'수영복'; }
+  else if(/청바지|데님/.test(n)) base='청바지';
+  else if(/반바지|버뮤다|스코츠/.test(n)) base='반바지';
+  else if(/스커트/.test(n)) base='스커트';
+  else if(/원피스/.test(n)) base='원피스';
+  else if(/점프수트/.test(n)) base='점프수트';
+  else if(/보디수트/.test(n)) base='보디수트';
+  else if(/코디세트/.test(n)) base='세트';
+  else if(/블레이저|자켓|재킷/.test(n)) base='자켓';
+  else if(/코트아우터|코트/.test(n)) base='코트';
+  else if(/니트/.test(n)) base='니트';
+  else if(/스웨트셔츠|맨투맨/.test(n)) base='맨투맨';
+  else if(/폴로/.test(n)) base='카라티셔츠';
+  else if(/티셔츠/.test(n)) base='티셔츠';
+  else if(/탑/.test(n)) base = g==='W'?'블라우스':'티셔츠';
+  else if(/오버셔츠/.test(n)) base='셔츠';
+  else if(/수트/.test(n)){ base = /액세서리/.test(n)?'넥타이':'셔츠'; }
+  else if(/셔츠/.test(n)) base='셔츠';
+  else if(/액세서리/.test(n)){
+    base = /모자/.test(n)?'모자' : /벨트/.test(n)?'벨트' : /양말/.test(n)?'양말' : /선글라스/.test(n)?'선글라스'
+         : /넥타이/.test(n)?'넥타이' : /반다나|스카프/.test(n)?'스카프' : /주얼리/.test(n)?'주얼리' : '패션소품';
+  }
+  else if(/바지|린넨|슬랙스|조거|치노|팬츠/.test(n)) base='슬랙스';
+  else base='의류';
+  return { gender:g, keyword:(gk?gk+' ':'')+base, base:base };
+}
+
+// =========================================================================
+// 규칙: 후보 카테고리 텍스트가 이 마켓·성별에 허용되는가
+// =========================================================================
+function acceptable(market, text, gender){
+  if(!text) return false;
+  if(FORBIDDEN.test(text)) return false;
+  if((market==='AUC20'||market==='GMK20') && /^\s*브랜드/.test(text)) return false; // 옥션/지마켓 브랜드 금지
+  // 성별 상충 배제
+  var hasW=/여성|여자|Women|Woman|레이디|Ladies/i.test(text);
+  var hasM=/남성|남자|\bMen\b|\bMan\b/i.test(text);
+  if(gender==='W' && hasM && !hasW) return false;
+  if(gender==='M' && hasW && !hasM) return false;
+  return true;
+}
+// 후보들 중 최적 선택: 허용된 것 우선, 11번가는 '해외' 우선, 키워드 base 포함 우선
+function pickBest(market, opts, gender, base){
+  var ok=opts.filter(function(o){ return acceptable(market, o.text, gender); });
+  if(!ok.length) return null;
+  function score(o){
+    var s=0;
+    if(market==='11ST' && /해외/.test(o.text)) s+=5;
+    if(base && o.text.indexOf(base)>=0) s+=2;
+    if(gender==='W' && /여성|Women/i.test(o.text)) s+=1;
+    if(gender==='M' && /남성|Men/i.test(o.text)) s+=1;
+    return s;
+  }
+  ok.sort(function(a,b){ return score(b)-score(a); });
+  return ok[0];
+}
+
+// =========================================================================
+// 설정 페이지 동작
+// =========================================================================
+function listOpts(market){
+  var sel=document.getElementById('openmarket_category_search_list_'+market);
+  if(!sel) return {sel:null, opts:[]};
+  return { sel:sel, opts:Array.prototype.slice.call(sel.options).map(function(o,i){ return {i:i, text:(o.text||'').trim(), val:o.value}; }).filter(function(o){ return o.text.indexOf('>')>=0; }) };
+}
+function selectOpt(market, idx){
+  var sel=document.getElementById('openmarket_category_search_list_'+market);
+  sel.selectedIndex=idx; sel.dispatchEvent(new Event('change',{bubbles:true}));
+}
+function doSearch(market, keyword){
+  var inp=document.getElementById('openmarket_category_search_text_'+market);
+  if(!inp) return false;
+  inp.value=keyword;
+  try{ search_category(market,'openmarket_category_search_list_'+market,''); }catch(e){ return false; }
+  return true;
+}
+async function waitAutomap(){
+  // 자동매핑 완료 판정: 주요 마켓 결과목록에 카테고리 옵션이 채워질 때까지 폴링
+  var t0=Date.now();
+  while(Date.now()-t0<25000){
+    var a=listOpts('AUC20').opts.length, b=listOpts('SMART').opts.length, c=listOpts('COUP').opts.length;
+    if(a>0 && b>0 && c>0) return true;
+    await sleep(700);
+  }
+  return false;
+}
+async function waitSearch(market, prevSig){
+  var t0=Date.now();
+  while(Date.now()-t0<8000){
+    var opts=listOpts(market).opts;
+    var sig=opts.map(function(o){return o.text;}).join('|');
+    if(opts.length && sig!==prevSig && !/검색중/.test(sig)) return opts;
+    await sleep(500);
+  }
+  return listOpts(market).opts;
+}
+
+// ---- 고시 상품군(notify_group) 보장 ----
+// form_check: 면제 외 마켓의 카테고리가 지정되면 notify_group_no가 반드시 채워져 있어야 통과.
+// automap이 상품군을 비동기로 채우므로(≈수 초) 저장 전에 (1) 채워질 때까지 대기하고 (2) 그래도 빈 곳은 직접 채운다.
+var NOTIFY_EXEMPT={CAFE24:1,MUSTIT:1,HAKYUNG:1,REEBONZ:1,BALAAN:1,TRENBE:1,SHOPEE:1,QOO10JP:1,SHOPIFY:1};
+function needsNotify(market){ return !NOTIFY_EXEMPT[market]; }
+function hasCategory(market){ var sel=document.getElementById('openmarket_category_search_list_'+market); return !!(sel && sel.value && sel.value!=='no_category'); }
+function groupSet(market){ var g=document.getElementById('notify_group_no_'+market); return !!(g && g.value); }
+// 카테고리가 지정된 비면제 마켓 목록
+function marketsNeedingGroup(){
+  return MARKETS.filter(function(m){ return needsNotify(m) && hasCategory(m); });
+}
+// automap의 상품군 채움을 대기(자동설정 값을 최대한 활용)
+async function waitNotifyGroups(timeout){
+  var t0=Date.now();
+  while(Date.now()-t0<(timeout||9000)){
+    var pend=marketsNeedingGroup().filter(function(m){ return !groupSet(m); });
+    if(!pend.length) return true;
+    await sleep(600);
+  }
+  return false;
+}
+// 상품유형에 맞는 고시 상품군 후보 텍스트(우선순위)
+function groupPrefFor(base){
+  if(/가방|벨트|모자|선글라스|스카프|주얼리|양말|패션소품|넥타이/.test(base)) return ['패션잡화','잡화','패션잡화 (모자/벨트/액세서리)','기타 재화'];
+  if(/스니커즈|신발|구두/.test(base)) return ['구두/신발','신발','구두','기타 재화'];
+  return ['의류','패션의류','기타 재화'];
+}
+// 여전히 빈 상품군을 직접 채움(automap 지연/실패 대비). 직접 채운 마켓 목록을 반환.
+function ensureNotifyGroups(cls){
+  var prefs=groupPrefFor(cls?cls.base:'');
+  var setM=[];
+  marketsNeedingGroup().forEach(function(m){
+    var g=document.getElementById('notify_group_no_'+m);
+    if(!g || g.value) return; // 이미 채워졌으면 automap 값 보존
+    var idx=-1;
+    for(var p=0;p<prefs.length && idx<0;p++){
+      for(var i=0;i<g.options.length;i++){ if((g.options[i].text||'').trim()===prefs[p]){ idx=i; break; } }
+    }
+    if(idx<0){ for(var j=0;j<g.options.length;j++){ if(/의류|잡화|기타\s*재화/.test(g.options[j].text||'')){ idx=j; break; } } }
+    if(idx<0){ for(var k=0;k<g.options.length;k++){ if(g.options[k].value){ idx=k; break; } } }
+    if(idx>=0){ g.selectedIndex=idx; g.dispatchEvent(new Event('change',{bubbles:true})); setM.push(m); }
+  });
+  return setM;
+}
+// ★ 상품군을 직접 지정한 마켓(주로 11번가·롯데ON)은 상품군 change 시 get_notify_item이 고시 항목을 로드하는데,
+//   대표님 절차대로 "상품상세페이지 참조" 마스터 체크박스를 체크해 고시 정보를 확정한다.
+//   (마스터 체크박스 onclick = chk_refer('all', el, '{M}_input_notify', '상품상세페이지 참조'))
+function applyNotifyRefer(markets){
+  (markets||[]).forEach(function(m){
+    var master=document.getElementById(m+'_input_notify');
+    if(!master) return;
+    if(!master.checked){ master.checked=true; }
+    try{
+      if(typeof chk_refer==='function'){ chk_refer('all', master, m+'_input_notify', '상품상세페이지 참조'); }
+      else { master.dispatchEvent(new Event('click',{bubbles:true})); }
+    }catch(e){}
+  });
+}
+
+async function processMarket(market, cls, chosenLog){
+  var base=cls.base, gender=cls.gender;
+  var cur=listOpts(market);
+  if(!cur.sel){ return; } // 이 마켓이 페이지에 없음
+  // 1) 자동매핑 추천 중 허용되는 최적 후보
+  var best=pickBest(market, cur.opts, gender, base);
+  // 2) 없으면 키워드 검색 후 재시도
+  if(!best){
+    var prevSig=cur.opts.map(function(o){return o.text;}).join('|');
+    if(doSearch(market, cls.keyword)){
+      var opts=await waitSearch(market, prevSig);
+      best=pickBest(market, opts, gender, base);
+      // 3) 그래도 없으면 성별 없이 base만으로 재검색
+      if(!best){
+        var prev2=listOpts(market).opts.map(function(o){return o.text;}).join('|');
+        if(doSearch(market, base)){ var o2=await waitSearch(market, prev2); best=pickBest(market, o2, gender, base); }
+      }
+    }
+  }
+  if(best){
+    selectOpt(market, best.i);
+    chosenLog[MLABEL[market]] = best.text;
+  } else {
+    // 아무 것도 허용 못함 → 자동매핑 원값 유지, 경고 로그
+    var keep=listOpts(market); var cs=keep.sel? (keep.sel.options[keep.sel.selectedIndex]||{}).text:'';
+    chosenLog[MLABEL[market]] = '(유지)'+(cs||'').trim();
+  }
+}
+
+function serializeForm(form){
+  var fd=new FormData(form);
+  var p=new URLSearchParams();
+  fd.forEach(function(v,k){ if(typeof v==='string') p.append(k,v); });
+  return p;
+}
+
+async function processFilter(state){
+  var item=state.queue[state.idx];
+  var name=item.name||'';
+  var cls=classify(name);
+  setStat('['+(state.idx+1)+'/'+state.queue.length+'] '+name+' — 자동매핑 실행...');
+
+  // 자동매핑 실행(버튼 텍스트/onclick 무엇이든 함수 직접 호출)
+  var aiBtn=Array.prototype.slice.call(document.querySelectorAll('a,button,input')).find(function(x){
+    var oc=(x.getAttribute&&x.getAttribute('onclick'))||''; return oc.indexOf('search_recommend_category_all')>=0 || /자동\s*매핑\s*시작/.test(x.textContent||x.value||'');
+  });
+  _alerts.length=0;
+  try{ if(typeof search_recommend_category_all==='function') search_recommend_category_all(aiBtn||{}); }catch(e){}
+  await waitAutomap();
+
+  // 마켓별 재선택
+  var chosen={};
+  for(var i=0;i<MARKETS.length;i++){ await processMarket(MARKETS[i], cls, chosen); }
+
+  // ★ 고시 처리: automap이 채울 때까지 대기 → 빈 곳 상품군 직접 지정 →
+  //   get_notify_item 로드 대기 → "상품상세페이지 참조" 마스터 체크박스 체크(대표님 절차)
+  //   상품군을 직접 지정한 마켓 + 대표님이 지목한 11번가/롯데ON은 항상 참조 체크.
+  setStat('['+(state.idx+1)+'/'+state.queue.length+'] '+name+' — 고시 상품군/참조 처리...');
+  await waitNotifyGroups(9000);
+  var setM=ensureNotifyGroups(cls);
+  var referTargets=[];
+  [].concat(setM, ['11ST','LTON']).forEach(function(m){ if(referTargets.indexOf(m)<0 && !NOTIFY_EXEMPT[m] && hasCategory(m)) referTargets.push(m); });
+  if(referTargets.length){ await sleep(1500); applyNotifyRefer(referTargets); await sleep(500); }
+
+  var rec={id:item.id, name:name, kw:cls.keyword, chosen:chosen};
+
+  if(state.dry){
+    rec.saved=false;
+    // 테스트 모드에서도 검증 결과를 로그로 남겨 사전 점검
+    try{ rec.formCheck=(typeof form_check==='function')?form_check():''; }catch(e){ rec.formCheck='ERR'; }
+    state.log.push(rec); state.ok++;
+    setStat('[테스트] '+name+' 매핑 계산 완료(저장 안 함)'+(rec.formCheck?(' · 검증경고: '+rec.formCheck):''));
+    return true;
+  }
+
+  // 저장: form_check 통과 시 fetch-POST. 실패 시 상품군 재지정+참조체크 후 1회 재시도.
+  var form=document.market_category || document.querySelector('form[name=market_category]');
+  var fc=''; try{ fc=(typeof form_check==='function')?form_check():''; }catch(e){ fc=''; }
+  if(fc){ var setM2=ensureNotifyGroups(cls); await sleep(1500); applyNotifyRefer(marketsNeedingGroup()); await sleep(600); try{ fc=(typeof form_check==='function')?form_check():''; }catch(e){ fc=''; } }
+  if(fc){ rec.saved=false; rec.err='검증실패: '+fc; state.log.push(rec); state.fail++; setStat('저장검증 실패: '+fc); return false; }
+  try{
+    var body=serializeForm(form);
+    var action=new URL(form.getAttribute('action')||'admin_category_ok.php', location.href).href;
+    var resp=await fetch(action,{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/x-www-form-urlencoded;charset=UTF-8'},body:body.toString()});
+    var ok=resp.status===200;
+    rec.saved=ok; if(!ok) rec.err='HTTP '+resp.status;
+    state.log.push(rec);
+    if(ok){ state.ok++; } else { state.fail++; }
+    return ok;
+  }catch(e){ rec.saved=false; rec.err=String(e); state.log.push(rec); state.fail++; return false; }
+}
+
+async function runSetPage(){
+  var state=gs();
+  if(!state || !state.running) return;
+  // 현재 페이지가 큐의 현재 항목인지 확인
+  var m=location.search.match(/ps_ftid=(\d+)/);
+  var curId=m?m[1]:null;
+  if(state.idx>=state.queue.length){ finish(state); return; }
+  var want=state.queue[state.idx];
+  if(curId!==String(want.id)){ // 위치 어긋남 → 올바른 필터로 이동
+    location.href=DIR()+'admin_category_set.php?tm=F&ps_ftid='+want.id;
+    return;
+  }
+  panelSet(state);
+  // 페이지/스크립트 준비 대기
+  await sleep(1200);
+  if(state.max && (state.ok+state.fail)>=state.max){ finish(state, true); return; }
+  var okgo=await processFilter(state);
+  // 다음으로
+  state.idx++; ss(state); panelSet(state);
+  if(state.idx>=state.queue.length){ finish(state); return; }
+  if(state.max && (state.ok+state.fail)>=state.max){ finish(state, true); return; }
+  await sleep(400);
+  location.href=DIR()+'admin_category_set.php?tm=F&ps_ftid='+state.queue[state.idx].id;
+}
+
+function finish(state, stoppedByMax){
+  state.running=false; ss(state);
+  var msg='완료 — 총 '+state.queue.length+' | 성공 '+state.ok+' · 실패 '+state.fail+(stoppedByMax?' (테스트 개수 도달)':'');
+  setStat(msg);
+  // 로그를 콘솔 + localStorage에 남김
+  try{ console.log('[TMG 카테고리매핑] 결과 로그:', JSON.stringify(state.log,null,1)); }catch(e){}
+  if(location.pathname.indexOf('admin_category_set.php')>=0){
+    // 목록으로 복귀
+    setTimeout(function(){ location.href=DIR()+'admin_group.php'; }, 1500);
+  }
+}
+
+// =========================================================================
+// 목록 페이지: 대상 수집 + 시작 패널
+// =========================================================================
+async function buildQueue(){
+  async function getPage(pg){
+    var p=new URLSearchParams();
+    p.set('ps_duse','1'); p.set('ft_group','all'); p.set('sch_field','title');
+    p.set('ft_sort','modify_des'); p.set('ft_num','100'); p.set('pg',String(pg));
+    var h=await fetch(DIR()+'admin_group.php?'+p.toString(),{credentials:'same-origin'}).then(function(r){return r.text();});
+    var doc=new DOMParser().parseFromString(h,'text/html');
+    var rows=[];
+    Array.prototype.slice.call(doc.querySelectorAll('a,button')).forEach(function(b){
+      var oc=(b.getAttribute&&b.getAttribute('onclick'))||'';
+      var mm=oc.match(/market_mapping_new\((['"])(\d+)\1\)/);
+      if(!mm) return;
+      var txt=(b.textContent||'').trim();
+      var tr=b.closest('tr'); var ni=tr?tr.querySelector('input[type=text]'):null;
+      rows.push({id:mm[2], name:ni?ni.value.trim():'', status:txt});
+    });
+    return rows;
+  }
+  var all=[], seen={};
+  for(var pg=1; pg<=8; pg++){ var r=await getPage(pg); if(!r.length) break; r.forEach(function(x){ if(!seen[x.id]){ seen[x.id]=1; all.push(x); } }); if(r.length<100) break; }
+  // Zara(독일자라) 미매핑만
+  return all.filter(function(x){ return x.status.indexOf('설정하기')>=0 && x.name.indexOf('독일자라')>=0; })
+            .map(function(x){ return {id:x.id, name:x.name}; });
+}
+
+async function startRun(){
+  setStat('대상 필터 수집 중...');
+  var queue;
+  try{ queue=await buildQueue(); }catch(e){ setStat('수집 실패: '+e.message); return; }
+  if(!queue.length){ setStat('대상(독일자라 미매핑) 필터가 없습니다.'); return; }
+  var dry=q('#tmgDry') && q('#tmgDry').checked;
+  var maxv=parseInt((q('#tmgMax') && q('#tmgMax').value)||'0',10)||0;
+  if(!confirm(queue.length+'개 독일자라 미매핑 필터를 '+(dry?'[테스트: 저장 안 함]':'[실제 저장]')+'으로 처리합니다.'+(maxv?(' (앞 '+maxv+'개만)'):'')+'\n진행할까요?')){ setStat('취소됨'); return; }
+  ss({running:true, dry:!!dry, idx:0, ok:0, fail:0, skip:0, max:maxv, queue:queue, log:[]});
+  location.href=DIR()+'admin_category_set.php?tm=F&ps_ftid='+queue[0].id;
+}
+
+// =========================================================================
+// UI
+// =========================================================================
+function setStat(m){ var s=q('#tmgCmStat'); if(s) s.textContent=m; var s2=q('#tmgCmStat2'); if(s2) s2.textContent=m; }
+function panelList(){
+  if(q('#tmgCmPanel')) return;
+  var p=document.createElement('div'); p.id='tmgCmPanel';
+  p.style.cssText='position:fixed;top:10px;right:10px;z-index:2147483647;background:#fff;border:2px solid #9b59b6;border-radius:8px;padding:10px 12px;width:300px;font:12px/1.6 "맑은 고딕",sans-serif;box-shadow:0 2px 10px rgba(0,0,0,.25)';
+  p.innerHTML='<div style="font-weight:bold;margin-bottom:6px">카테고리매핑 자동(Zara)</div>'
+   +'<div style="margin-bottom:4px"><label><input type="checkbox" id="tmgDry" checked> 테스트(저장 안 함)</label></div>'
+   +'<div style="margin-bottom:4px">앞에서 <input id="tmgMax" type="number" value="3" min="0" style="width:50px"> 개만 (0=전체)</div>'
+   +'<button id="tmgCmGo">대상 수집 &amp; 시작</button> <button id="tmgCmStop" style="color:#d9534f">정지</button>'
+   +'<div id="tmgCmStat" style="margin-top:8px;color:#333;min-height:32px">대기중</div>'
+   +'<div style="margin-top:6px;color:#888;font-size:11px">※ 진행 중 페이지가 계속 이동합니다. 팝업창은 건드리지 마세요. 결과는 콘솔(F12)에 기록됩니다.</div>';
+  document.body.appendChild(p);
+  q('#tmgCmGo').onclick=startRun;
+  q('#tmgCmStop').onclick=function(){ var s=gs(); if(s){ s.running=false; ss(s); } setStat('정지했습니다.'); };
+}
+function panelSet(state){
+  if(q('#tmgCmMini')) { return; }
+  var p=document.createElement('div'); p.id='tmgCmMini';
+  p.style.cssText='position:fixed;top:10px;right:10px;z-index:2147483647;background:#fff;border:2px solid #9b59b6;border-radius:8px;padding:8px 10px;width:300px;font:12px/1.5 "맑은 고딕",sans-serif;box-shadow:0 2px 10px rgba(0,0,0,.25)';
+  p.innerHTML='<div style="font-weight:bold">카테고리매핑 진행중'+(state.dry?' [테스트]':'')+'</div><div id="tmgCmStat2" style="margin-top:6px;color:#333;min-height:32px"></div>'
+   +'<button id="tmgCmStop2" style="color:#d9534f;margin-top:6px">정지</button>';
+  document.body.appendChild(p);
+  q('#tmgCmStop2').onclick=function(){ var s=gs(); if(s){ s.running=false; ss(s); } setStat('정지 요청됨 — 현재 항목 후 멈춥니다.'); };
+}
+
+function boot(){
+  if(location.pathname.indexOf('admin_group.php')>=0){ panelList(); }
+  else if(location.pathname.indexOf('admin_category_set.php')>=0){ var s2=gs(); if(s2&&s2.running){ panelSet(s2); runSetPage(); } }
+}
+if(document.readyState==='complete') boot();
+else window.addEventListener('load', boot);
+})();
