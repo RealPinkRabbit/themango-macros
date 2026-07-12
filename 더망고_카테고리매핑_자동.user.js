@@ -347,8 +347,8 @@ async function buildQueue(){
   }
   var all=[], seen={};
   for(var pg=1; pg<=8; pg++){ var r=await getPage(pg); if(!r.length) break; r.forEach(function(x){ if(!seen[x.id]){ seen[x.id]=1; all.push(x); } }); if(r.length<100) break; }
-  // Zara(독일자라) 미매핑만
-  return all.filter(function(x){ return x.status.indexOf('설정하기')>=0 && x.name.indexOf('독일자라')>=0; })
+  // Zara(독일자라) 전체 — 상태 무관(설정하기=미매핑 + 설정수정=완료 모두 재매핑)
+  return all.filter(function(x){ return x.name.indexOf('독일자라')>=0; })
             .map(function(x){ return {id:x.id, name:x.name}; });
 }
 
@@ -356,10 +356,10 @@ async function startRun(){
   setStat('대상 필터 수집 중...');
   var queue;
   try{ queue=await buildQueue(); }catch(e){ setStat('수집 실패: '+e.message); return; }
-  if(!queue.length){ setStat('대상(독일자라 미매핑) 필터가 없습니다.'); return; }
+  if(!queue.length){ setStat('대상(독일자라) 필터가 없습니다.'); return; }
   var dry=q('#tmgDry') && q('#tmgDry').checked;
   var maxv=parseInt((q('#tmgMax') && q('#tmgMax').value)||'0',10)||0;
-  if(!confirm(queue.length+'개 독일자라 미매핑 필터를 '+(dry?'[테스트: 저장 안 함]':'[실제 저장]')+'으로 처리합니다.'+(maxv?(' (앞 '+maxv+'개만)'):'')+'\n진행할까요?')){ setStat('취소됨'); return; }
+  if(!confirm(queue.length+'개 독일자라 필터를 '+(dry?'[테스트: 저장 안 함]':'[실제 저장]')+'으로 처리합니다. (설정하기+설정수정 모두 포함)'+(maxv?(' (앞 '+maxv+'개만)'):'')+'\n진행할까요?')){ setStat('취소됨'); return; }
   ss({running:true, dry:!!dry, idx:0, ok:0, fail:0, skip:0, max:maxv, queue:queue, log:[]});
   location.href=DIR()+'admin_category_set.php?tm=F&ps_ftid='+queue[0].id;
 }
