@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         더망고 카테고리매핑 자동(필터 순차 + 규칙기반 검수)
 // @namespace    solddeul.tmg
-// @version      1.0
+// @version      1.1
 // @description  검색필터 세부설정의 (오픈)마켓 카테고리 매핑을 자동화. 각 필터: 설정열기(admin_category_set.php)→AI자동매핑→11개 마켓을 규칙(금지어/브랜드 회피·성별 일치·11번가 해외+고시=의류)으로 재선택→fetch-POST 저장→다음. Zara(독일자라) 미매핑 필터만 대상. localStorage로 새로고침을 넘어 진행. 테스트(저장 안 함) 모드 지원. 팝업창은 건드리지 않음.
 // @match        https://tmg4682.mycafe24.com/mall/admin/admin_group.php*
 // @match        https://tmg4682.mycafe24.com/mall/admin/admin_category_set.php*
@@ -17,9 +17,13 @@ try{ window.alert=function(m){ _alerts.push(String(m)); }; }catch(e){}
 try{ window.confirm=function(){ return true; }; }catch(e){}
 
 var LS='tmg_catmap_v1';           // {running, dry, idx, ok, fail, skip, max, queue:[{id,name}], log:[]}
+var _stopStart=false;             // 목록페이지 대상수집(buildQueue) 중 정지 요청 플래그(같은 페이지 내 유효)
 var MARKETS=['AUC20','GMK20','11ST','SMART','COUP','LTON','LFMALL','MUSTIT','SHOPEE','QOO10JP','PLAYAUTO'];
 var MLABEL={AUC20:'옥션',GMK20:'G마켓','11ST':'11번가',SMART:'스마트스토어',COUP:'쿠팡',LTON:'롯데ON',LFMALL:'LF몰',MUSTIT:'머스트잇',SHOPEE:'쇼피',QOO10JP:'큐텐JP',PLAYAUTO:'플레이오토'};
-var FORBIDDEN=/(어린이|유아|아동|도서|서적|e쿠폰|모바일쿠폰|모바일상품권|렌탈|렌터카|배달음식|출산|육아|임산부|임부|위생용품|의료기기|의약품)/;
+var FORBIDDEN=/(어린이|유아|아동|도서|서적|e쿠폰|모바일|렌탈|렌터카|배달음식|출산|육아|임산부|임부|위생용품|의료기기|의약품)/; // [E] 공통 금지어(모바일 전체 포함)
+var PET=/(반려|애완|강아지|고양이|반려동물)/;           // [B] 반려동물 카테고리 금지(전 마켓)
+var INVALID_MARK=/(카테고리를\s*변경|변경해주세요)/;    // [A] 사이트가 무효로 표시한 카테고리
+var ELEVEN_FORBIDDEN=/(디자이너|biz)/i;                 // [D] 11번가 디자이너/biz 금지
 
 function gs(){ try{ return JSON.parse(localStorage.getItem(LS))||null; }catch(e){ return null; } }
 function ss(s){ localStorage.setItem(LS, JSON.stringify(s)); }
@@ -67,32 +71,93 @@ function classify(name){
 }
 
 // =========================================================================
+// [H] 유형(가먼트 계열) — 상충 카테고리 회피 + 올바른 계열 가점
+// =========================================================================
+var FAM={
+  TOP:/티셔츠|셔츠|블라우스|니트|맨투맨|스웨트|후드|폴로|나시|카디건|상의|탑/,
+  OUTER:/코트|자켓|재킷|점퍼|패딩|블레이저|아우터|야상|바람막이/,
+  BOTTOM:/바지|팬츠|반바지|청바지|슬랙스|데님|레깅스|조거|치노|숏팬츠|핫팬츠|하의/,
+  SKIRT:/스커트|치마/,
+  DRESS:/원피스|드레스|점프수트|점프슈트|jumpsuit|dress/i,
+  SHOES:/신발|스니커즈|운동화|구두|부츠|샌들|슬리퍼|로퍼|힐|슈즈|shoes|boots|sneaker|loafer/i,
+  BAG:/가방|백팩|클러치|토트|숄더|크로스백|핸드백|파우치|bag/i,
+  ACC:/모자|캡|비니|벨트|양말|선글라스|아이웨어|넥타이|타이|스카프|머플러|목도리|장갑|주얼리|액세서리|악세|패션소품|잡화|acc/i,
+  SWIM:/수영|비치|스윔|비키니|래시가드|보드숏|swim/i
+};
+// base → 기대 계열(명확한 것만; 보디수트/세트/의류 등 모호한 것은 제외해 강제 재검색 방지)
+var BASE_FAM={'가방':'BAG','스니커즈':'SHOES','양말':'ACC','수영복':'SWIM','청바지':'BOTTOM','반바지':'BOTTOM','스커트':'SKIRT','원피스':'DRESS','점프수트':'DRESS','자켓':'OUTER','코트':'OUTER','니트':'TOP','맨투맨':'TOP','카라티셔츠':'TOP','티셔츠':'TOP','블라우스':'TOP','셔츠':'TOP','넥타이':'ACC','슬랙스':'BOTTOM','모자':'ACC','벨트':'ACC','선글라스':'ACC','스카프':'ACC','주얼리':'ACC','패션소품':'ACC'};
+// base → 동의어/연관어(부분일치 가점용)
+var BASE_SYN={
+ '반바지':/반바지|숏팬츠|핫팬츠|버뮤다|하프팬츠|치마바지|보드숏/,
+ '슬랙스':/슬랙스|슬랙|팬츠|바지|치노|조거|린넨|와이드/,
+ '청바지':/청바지|데님|진|jean|denim/i,
+ '스커트':/스커트|치마/,
+ '원피스':/원피스|드레스/,
+ '점프수트':/점프수트|점프슈트|jumpsuit|올인원|롬퍼/i,
+ '자켓':/자켓|재킷|블레이저|jacket|blazer/i,
+ '코트':/코트|coat/i,
+ '니트':/니트|스웨터|가디건|카디건|knit/i,
+ '맨투맨':/맨투맨|스웨트|후드|기모/,
+ '카라티셔츠':/폴로|카라|피케/,
+ '티셔츠':/티셔츠/,
+ '블라우스':/블라우스|셔츠|탑/,
+ '셔츠':/셔츠|블라우스/,
+ '가방':/가방|백팩|토트|숄더|크로스|클러치|핸드백|파우치|bag/i,
+ '스니커즈':/스니커즈|운동화|신발|슈즈|스니커|sneaker|shoes/i,
+ '넥타이':/넥타이|타이|tie/i,
+ '벨트':/벨트|belt/i,
+ '모자':/모자|캡|비니|햇|hat|cap/i,
+ '선글라스':/선글라스|아이웨어|sunglass/i,
+ '스카프':/스카프|머플러|목도리|반다나|scarf/i,
+ '주얼리':/주얼리|목걸이|귀걸이|반지|팔찌|jewelry/i,
+ '양말':/양말|삭스|socks/i,
+ '수영복':/수영복|비키니|스윔|비치|래시가드|swim/i,
+ '패션소품':/소품|잡화|액세서리|악세/
+};
+function famOfBase(base){ return BASE_FAM[base]||null; }
+function famsOf(text){ var r=[]; for(var k in FAM){ if(FAM[k].test(text)) r.push(k); } return r; }
+// 후보가 기대 계열과 '다른 가먼트 계열'에 속하는가(명백한 상충일 때만 true → 재검색 트리거)
+function conflictFam(base, text){
+  var ef=famOfBase(base); if(!ef || !text) return false;
+  var fams=famsOf(text);
+  if(fams.indexOf(ef)>=0) return false; // 기대 계열 포함 → 정상
+  return fams.length>0;                 // 기대 계열 없이 다른 계열만 → 상충
+}
+
+// =========================================================================
 // 규칙: 후보 카테고리 텍스트가 이 마켓·성별에 허용되는가
 // =========================================================================
 function acceptable(market, text, gender){
   if(!text) return false;
-  if(FORBIDDEN.test(text)) return false;
-  if((market==='AUC20'||market==='GMK20') && /^\s*브랜드/.test(text)) return false; // 옥션/지마켓 브랜드 금지
-  // 성별 상충 배제
+  if(FORBIDDEN.test(text)) return false;        // [E] 공통 금지어
+  if(PET.test(text)) return false;              // [B] 반려동물
+  if(INVALID_MARK.test(text)) return false;     // [A] 사이트 무효 표시
+  if(market==='11ST' && ELEVEN_FORBIDDEN.test(text)) return false; // [D] 11번가 디자이너/biz
+  if((market==='AUC20'||market==='GMK20') && /브랜드/.test(text)) return false; // [C] 옥션/지마켓 '브랜드' 포함 금지
+  // [F] 성별 상충 배제
   var hasW=/여성|여자|Women|Woman|레이디|Ladies/i.test(text);
   var hasM=/남성|남자|\bMen\b|\bMan\b/i.test(text);
   if(gender==='W' && hasM && !hasW) return false;
   if(gender==='M' && hasW && !hasM) return false;
   return true;
 }
-// 후보들 중 최적 선택: 허용된 것 우선, 11번가는 '해외' 우선, 키워드 base 포함 우선
+// 후보 점수: 11번가 '해외' 우선 + 올바른 계열 가점 + 상충 계열 감점 + base/동의어 포함 + 성별 일치
+function catScore(market, text, gender, base){
+  var s=0;
+  if(market==='11ST' && /해외/.test(text)) s+=5;
+  var ef=famOfBase(base);
+  if(ef){ var fams=famsOf(text); if(fams.indexOf(ef)>=0) s+=4; else if(fams.length) s-=3; }
+  if(base && text.indexOf(base)>=0) s+=2;
+  var syn=BASE_SYN[base]; if(syn && syn.test(text)) s+=2;
+  if(gender==='W' && /여성|Women/i.test(text)) s+=1;
+  if(gender==='M' && /남성|Men/i.test(text)) s+=1;
+  return s;
+}
+// 허용 후보 중 최고 점수 선택
 function pickBest(market, opts, gender, base){
   var ok=opts.filter(function(o){ return acceptable(market, o.text, gender); });
   if(!ok.length) return null;
-  function score(o){
-    var s=0;
-    if(market==='11ST' && /해외/.test(o.text)) s+=5;
-    if(base && o.text.indexOf(base)>=0) s+=2;
-    if(gender==='W' && /여성|Women/i.test(o.text)) s+=1;
-    if(gender==='M' && /남성|Men/i.test(o.text)) s+=1;
-    return s;
-  }
-  ok.sort(function(a,b){ return score(b)-score(a); });
+  ok.sort(function(a,b){ return catScore(market,b.text,gender,base)-catScore(market,a.text,gender,base); });
   return ok[0];
 }
 
@@ -195,30 +260,37 @@ function applyNotifyRefer(markets){
   });
 }
 
+// 키워드로 검색 후 최적 후보 반환(반환된 후보의 .i는 '검색 직후 현재 리스트' 기준으로만 유효)
+async function searchBest(market, keyword, gender, base){
+  var prev=listOpts(market).opts.map(function(o){return o.text;}).join('|');
+  if(!doSearch(market, keyword)) return null;
+  var opts=await waitSearch(market, prev);
+  return pickBest(market, opts, gender, base);
+}
 async function processMarket(market, cls, chosenLog){
   var base=cls.base, gender=cls.gender;
   var cur=listOpts(market);
   if(!cur.sel){ return; } // 이 마켓이 페이지에 없음
   // 1) 자동매핑 추천 중 허용되는 최적 후보
   var best=pickBest(market, cur.opts, gender, base);
-  // 2) 없으면 키워드 검색 후 재시도
-  if(!best){
-    var prevSig=cur.opts.map(function(o){return o.text;}).join('|');
-    if(doSearch(market, cls.keyword)){
-      var opts=await waitSearch(market, prevSig);
-      best=pickBest(market, opts, gender, base);
-      // 3) 그래도 없으면 성별 없이 base만으로 재검색
-      if(!best){
-        var prev2=listOpts(market).opts.map(function(o){return o.text;}).join('|');
-        if(doSearch(market, base)){ var o2=await waitSearch(market, prev2); best=pickBest(market, o2, gender, base); }
-      }
+  // 2) 후보가 없거나 '계열 상충'(예: 반바지→숏코트/구두/스커트)이면 키워드 검색으로 더 나은 후보 탐색.
+  //    ※ 검색은 select 옵션을 교체하므로, 자동매핑 후보는 포기하고 '검색 결과에서만' 선택한다.
+  if(!best || conflictFam(base, best.text)){
+    best=null;
+    var b1=await searchBest(market, cls.keyword, gender, base);   // 현재 리스트 = 키워드 결과
+    if(b1 && !conflictFam(base, b1.text)){ best=b1; }
+    else {
+      var b2=await searchBest(market, base, gender, base);        // 현재 리스트 = base 결과
+      if(b2 && (!b1 || catScore(market,b2.text,gender,base)>=catScore(market,b1.text,gender,base))){ best=b2; }
+      else if(b1){ best=await searchBest(market, cls.keyword, gender, base); } // b1이 더 나음 → 키워드 재검색으로 리스트 복원
+      else { best=b2; } // 둘 다 약하면 있는 것 사용(없으면 null)
     }
   }
   if(best){
     selectOpt(market, best.i);
     chosenLog[MLABEL[market]] = best.text;
   } else {
-    // 아무 것도 허용 못함 → 자동매핑 원값 유지, 경고 로그
+    // 아무 것도 허용 못함 → 현재 리스트 선택값 유지, 경고 로그
     var keep=listOpts(market); var cs=keep.sel? (keep.sel.options[keep.sel.selectedIndex]||{}).text:'';
     chosenLog[MLABEL[market]] = '(유지)'+(cs||'').trim();
   }
@@ -302,8 +374,14 @@ async function runSetPage(){
   panelSet(state);
   // 페이지/스크립트 준비 대기
   await sleep(1200);
+  // 자동매핑 시작 전 정지 확인(현재 항목을 아직 시작 안 했으면 즉시 멈춤)
+  if(!gs() || !gs().running){ stopHere(state, '정지되었습니다.'); return; }
   if(state.max && (state.ok+state.fail)>=state.max){ finish(state, true); return; }
   var okgo=await processFilter(state);
+  // ★ 정지 반영: processFilter(수 초) 도중 눌린 정지 플래그가 아래 ss(state)로 덮어써지지 않도록
+  //   localStorage의 최신 running 값을 다시 읽어 메모리 state에 반영.
+  var latest=gs();
+  if(latest && latest.running===false){ state.idx++; stopHere(state, '정지되었습니다 — 성공 '+state.ok+' · 실패 '+state.fail); return; }
   // 다음으로
   state.idx++; ss(state); panelSet(state);
   if(state.idx>=state.queue.length){ finish(state); return; }
@@ -312,6 +390,15 @@ async function runSetPage(){
   location.href=DIR()+'admin_category_set.php?tm=F&ps_ftid='+state.queue[state.idx].id;
 }
 
+// 정지 요청 처리: running 확정 종료 + 진행분 저장 + 목록 복귀
+function stopHere(state, msg){
+  state.running=false; ss(state);
+  setStat(msg||'정지되었습니다.');
+  try{ console.log('[TMG 카테고리매핑] 정지 — 결과 로그:', JSON.stringify(state.log,null,1)); }catch(e){}
+  if(location.pathname.indexOf('admin_category_set.php')>=0){
+    setTimeout(function(){ location.href=DIR()+'admin_group.php'; }, 1200);
+  }
+}
 function finish(state, stoppedByMax){
   state.running=false; ss(state);
   var msg='완료 — 총 '+state.queue.length+' | 성공 '+state.ok+' · 실패 '+state.fail+(stoppedByMax?' (테스트 개수 도달)':'');
@@ -353,13 +440,16 @@ async function buildQueue(){
 }
 
 async function startRun(){
+  _stopStart=false;                 // 이번 실행 시작 시 정지 요청 초기화
   setStat('대상 필터 수집 중...');
   var queue;
   try{ queue=await buildQueue(); }catch(e){ setStat('수집 실패: '+e.message); return; }
+  if(_stopStart){ setStat('정지했습니다.'); return; }   // 수집 도중 정지 요청됨
   if(!queue.length){ setStat('대상(독일자라) 필터가 없습니다.'); return; }
   var dry=q('#tmgDry') && q('#tmgDry').checked;
   var maxv=parseInt((q('#tmgMax') && q('#tmgMax').value)||'0',10)||0;
   if(!confirm(queue.length+'개 독일자라 필터를 '+(dry?'[테스트: 저장 안 함]':'[실제 저장]')+'으로 처리합니다. (설정하기+설정수정 모두 포함)'+(maxv?(' (앞 '+maxv+'개만)'):'')+'\n진행할까요?')){ setStat('취소됨'); return; }
+  if(_stopStart){ setStat('정지했습니다.'); return; }   // 확인창 대기 중 정지 요청됨
   ss({running:true, dry:!!dry, idx:0, ok:0, fail:0, skip:0, max:maxv, queue:queue, log:[]});
   location.href=DIR()+'admin_category_set.php?tm=F&ps_ftid='+queue[0].id;
 }
@@ -380,7 +470,7 @@ function panelList(){
    +'<div style="margin-top:6px;color:#888;font-size:11px">※ 진행 중 페이지가 계속 이동합니다. 팝업창은 건드리지 마세요. 결과는 콘솔(F12)에 기록됩니다.</div>';
   document.body.appendChild(p);
   q('#tmgCmGo').onclick=startRun;
-  q('#tmgCmStop').onclick=function(){ var s=gs(); if(s){ s.running=false; ss(s); } setStat('정지했습니다.'); };
+  q('#tmgCmStop').onclick=function(){ _stopStart=true; var s=gs(); if(s){ s.running=false; ss(s); } setStat('정지했습니다.'); };
 }
 function panelSet(state){
   if(q('#tmgCmMini')) { return; }
