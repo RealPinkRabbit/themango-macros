@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         더망고 카테고리매핑 자동(필터 순차 + 규칙기반 검수)
 // @namespace    solddeul.tmg
-// @version      1.2
+// @version      1.3
 // @description  검색필터 세부설정의 (오픈)마켓 카테고리 매핑을 자동화. 각 필터: 설정열기(admin_category_set.php)→AI자동매핑→11개 마켓을 규칙(금지어/브랜드 회피·성별 일치·11번가 해외+고시=의류)으로 재선택→fetch-POST 저장→다음. Zara(독일자라) 미매핑 필터만 대상. localStorage로 새로고침을 넘어 진행. 테스트(저장 안 함) 모드 지원. 팝업창은 건드리지 않음.
 // @match        https://tmg4682.mycafe24.com/mall/admin/admin_group.php*
 // @match        https://tmg4682.mycafe24.com/mall/admin/admin_category_set.php*
@@ -20,8 +20,8 @@ var LS='tmg_catmap_v1';           // {running, dry, idx, ok, fail, skip, max, qu
 var _stopStart=false;             // 목록페이지 대상수집(buildQueue) 중 정지 요청 플래그(같은 페이지 내 유효)
 var MARKETS=['AUC20','GMK20','11ST','SMART','COUP','LTON','LFMALL','MUSTIT','SHOPEE','QOO10JP','PLAYAUTO'];
 var MLABEL={AUC20:'옥션',GMK20:'G마켓','11ST':'11번가',SMART:'스마트스토어',COUP:'쿠팡',LTON:'롯데ON',LFMALL:'LF몰',MUSTIT:'머스트잇',SHOPEE:'쇼피',QOO10JP:'큐텐JP',PLAYAUTO:'플레이오토'};
-var FORBIDDEN=/(어린이|유아|아동|도서|서적|e쿠폰|모바일|렌탈|렌터카|배달음식|출산|육아|임산부|임부|위생용품|의료기기|의약품)/; // [E] 공통 금지어(모바일 전체 포함)
-var PET=/(반려|애완|강아지|고양이|반려동물)/;           // [B] 반려동물 카테고리 금지(전 마켓)
+var FORBIDDEN=/(어린이|유아|아동|도서|서적|e쿠폰|모바일|렌탈|렌터카|배달음식|출산|육아|임산부|임부|위생용품|의료기기|의약품|Baby|Kids|Toddler|Infant|Children|Maternity)/i; // [E] 공통 금지어(모바일 전체 + 영어 키즈/임부)
+var PET=/(반려|애완|강아지|고양이|반려동물|\bPets?\b)/i; // [B] 반려동물 카테고리 금지(전 마켓, 영어 Pet 포함)
 var INVALID_MARK=/(카테고리를\s*변경|변경해주세요)/;    // [A] 사이트가 무효로 표시한 카테고리
 var ELEVEN_FORBIDDEN=/(디자이너|biz)/i;                 // [D] 11번가 디자이너/biz 금지
 
@@ -74,45 +74,45 @@ function classify(name){
 // [H] 유형(가먼트 계열) — 상충 카테고리 회피 + 올바른 계열 가점
 // =========================================================================
 var FAM={
-  TOP:/티셔츠|셔츠|블라우스|니트|맨투맨|스웨트|후드|폴로|나시|카디건|상의|탑/,
-  OUTER:/코트|자켓|재킷|점퍼|패딩|블레이저|아우터|야상|바람막이/,
-  BOTTOM:/바지|팬츠|반바지|청바지|슬랙스|데님|레깅스|조거|치노|숏팬츠|핫팬츠|하의/,
-  SKIRT:/스커트|치마/,
-  DRESS:/원피스|드레스|점프수트|점프슈트|jumpsuit|dress/i,
-  SHOES:/신발|스니커즈|운동화|구두|부츠|샌들|슬리퍼|로퍼|힐|슈즈|shoes|boots|sneaker|loafer/i,
-  BAG:/가방|백팩|클러치|토트|숄더|크로스백|핸드백|파우치|bag/i,
-  ACC:/모자|캡|비니|벨트|양말|선글라스|아이웨어|넥타이|타이|스카프|머플러|목도리|장갑|주얼리|액세서리|악세|패션소품|잡화|acc/i,
-  SWIM:/수영|비치|스윔|비키니|래시가드|보드숏|swim/i
+  TOP:/티셔츠|셔츠|블라우스|니트|맨투맨|스웨트|후드|폴로|나시|카디건|상의|탑|t-?shirt|tee|shirt|blouse|knit|sweater|hoodie|polo/i,
+  OUTER:/코트|자켓|재킷|점퍼|패딩|블레이저|아우터|야상|바람막이|coat|jacket|blazer|outerwear|parka|padding/i,
+  BOTTOM:/바지|팬츠|반바지|청바지|슬랙스|데님|레깅스|조거|치노|숏팬츠|핫팬츠|하의|pants|trouser|jeans|denim|leggings|shorts|slacks|jogger|chino|bottoms/i,
+  SKIRT:/스커트|치마|skirt/i,
+  DRESS:/원피스|드레스|점프수트|점프슈트|jumpsuit|dress|romper|bodysuit/i,
+  SHOES:/신발|스니커즈|운동화|구두|부츠|샌들|슬리퍼|로퍼|힐|슈즈|shoes?|boots?|sneaker|loafer|sandal|slipper|heel|flip ?flop/i,
+  BAG:/가방|백팩|클러치|토트|숄더|크로스백|핸드백|파우치|bag|backpack|tote|clutch|handbag|luggage/i,
+  ACC:/모자|캡|비니|벨트|양말|선글라스|아이웨어|넥타이|타이|스카프|머플러|목도리|장갑|주얼리|액세서리|악세|패션소품|잡화|acc|hat|\bcap\b|beanie|belt|socks|sunglass|necktie|bow ?tie|scarf|jewelry|accessor/i,
+  SWIM:/수영|비치|스윔|비키니|래시가드|보드숏|swim|bikini|beach/i
 };
 // base → 기대 계열(명확한 것만; 보디수트/세트/의류 등 모호한 것은 제외해 강제 재검색 방지)
 var BASE_FAM={'가방':'BAG','스니커즈':'SHOES','양말':'ACC','수영복':'SWIM','청바지':'BOTTOM','반바지':'BOTTOM','스커트':'SKIRT','원피스':'DRESS','점프수트':'DRESS','자켓':'OUTER','코트':'OUTER','니트':'TOP','맨투맨':'TOP','카라티셔츠':'TOP','티셔츠':'TOP','블라우스':'TOP','셔츠':'TOP','넥타이':'ACC','슬랙스':'BOTTOM','모자':'ACC','벨트':'ACC','선글라스':'ACC','스카프':'ACC','주얼리':'ACC','패션소품':'ACC'};
 // base → 동의어/연관어(부분일치 가점용)
 var BASE_SYN={
- '반바지':/반바지|숏팬츠|핫팬츠|버뮤다|하프팬츠|치마바지|보드숏/,
- '슬랙스':/슬랙스|슬랙|팬츠|바지|치노|조거|린넨|와이드/,
+ '반바지':/반바지|숏팬츠|핫팬츠|버뮤다|하프팬츠|치마바지|보드숏|shorts/i,
+ '슬랙스':/슬랙스|슬랙|팬츠|바지|치노|조거|린넨|와이드|pants|trouser|slacks|chino|jogger/i,
  '청바지':/청바지|데님|진|jean|denim/i,
- '스커트':/스커트|치마/,
- '원피스':/원피스|드레스/,
- '점프수트':/점프수트|점프슈트|jumpsuit|올인원|롬퍼/i,
+ '스커트':/스커트|치마|skirt/i,
+ '원피스':/원피스|드레스|dress/i,
+ '점프수트':/점프수트|점프슈트|jumpsuit|올인원|롬퍼|romper/i,
  '자켓':/자켓|재킷|블레이저|jacket|blazer/i,
  '코트':/코트|coat/i,
- '니트':/니트|스웨터|가디건|카디건|knit/i,
- '맨투맨':/맨투맨|스웨트|후드|기모/,
- '카라티셔츠':/폴로|카라|피케/,
- '티셔츠':/티셔츠/,
- '블라우스':/블라우스|셔츠|탑/,
- '셔츠':/셔츠|블라우스/,
- '가방':/가방|백팩|토트|숄더|크로스|클러치|핸드백|파우치|bag/i,
+ '니트':/니트|스웨터|가디건|카디건|knit|sweater|cardigan/i,
+ '맨투맨':/맨투맨|스웨트|후드|기모|sweatshirt|hoodie/i,
+ '카라티셔츠':/폴로|카라|피케|polo/i,
+ '티셔츠':/티셔츠|t-?shirt|tee/i,
+ '블라우스':/블라우스|셔츠|탑|blouse|shirt/i,
+ '셔츠':/셔츠|블라우스|shirt|blouse/i,
+ '가방':/가방|백팩|토트|숄더|크로스|클러치|핸드백|파우치|bag|backpack|tote|handbag/i,
  '스니커즈':/스니커즈|운동화|신발|슈즈|스니커|sneaker|shoes/i,
- '넥타이':/넥타이|타이|tie/i,
+ '넥타이':/넥타이|necktie|bow ?tie|cravat/i,
  '벨트':/벨트|belt/i,
- '모자':/모자|캡|비니|햇|hat|cap/i,
- '선글라스':/선글라스|아이웨어|sunglass/i,
- '스카프':/스카프|머플러|목도리|반다나|scarf/i,
- '주얼리':/주얼리|목걸이|귀걸이|반지|팔찌|jewelry/i,
+ '모자':/모자|캡|비니|햇|hat|\bcap\b|beanie/i,
+ '선글라스':/선글라스|아이웨어|sunglass|eyewear/i,
+ '스카프':/스카프|머플러|목도리|반다나|scarf|muffler/i,
+ '주얼리':/주얼리|목걸이|귀걸이|반지|팔찌|jewelry|necklace|earring/i,
  '양말':/양말|삭스|socks/i,
- '수영복':/수영복|비키니|스윔|비치|래시가드|swim/i,
- '패션소품':/소품|잡화|액세서리|악세/
+ '수영복':/수영복|비키니|스윔|비치|래시가드|swim|bikini/i,
+ '패션소품':/소품|잡화|액세서리|악세|accessor/i
 };
 function famOfBase(base){ return BASE_FAM[base]||null; }
 function famsOf(text){ var r=[]; for(var k in FAM){ if(FAM[k].test(text)) r.push(k); } return r; }
@@ -130,6 +130,10 @@ function famGeneralKw(base, gender){
   var g = gender==='W' ? '여성 ' : (gender==='M' ? '남성 ' : '');
   return g+FAM_KW[ef];
 }
+// 영어권 마켓(쇼피/머스트잇)은 한글 검색이 안 먹어 영어 키워드 필요
+var ENGLISH_MARKETS={SHOPEE:1, MUSTIT:1};
+var ENG_BASE={'가방':'bag','스니커즈':'sneakers','반바지':'shorts','슬랙스':'pants','청바지':'jeans','스커트':'skirt','원피스':'dress','점프수트':'jumpsuit','보디수트':'bodysuit','자켓':'jacket','코트':'coat','니트':'knit','맨투맨':'sweatshirt','카라티셔츠':'polo','티셔츠':'t-shirt','블라우스':'blouse','셔츠':'shirt','넥타이':'necktie','벨트':'belt','모자':'hat','선글라스':'sunglasses','스카프':'scarf','주얼리':'jewelry','양말':'socks','수영복':'swimwear'};
+function engKws(base){ var e=ENG_BASE[base]; return e?[e]:[]; }
 
 // =========================================================================
 // 규칙: 후보 카테고리 텍스트가 이 마켓·성별에 허용되는가
@@ -158,6 +162,8 @@ function catScore(market, text, gender, base){
   var syn=BASE_SYN[base]; if(syn && syn.test(text)) s+=2;
   if(gender==='W' && /여성|Women/i.test(text)) s+=1;
   if(gender==='M' && /남성|Men/i.test(text)) s+=1;
+  if(/fashion|apparel|clothes|clothing|\bbags?\b|의류|여성복|남성복|잡화/i.test(text)) s+=1;   // 의류/패션 맥락 우대(영어권 노이즈 구분)
+  if(/automobile|motorcycle|beauty|makeup|\bhome\b|grocery|food|stationery|hair access|utilities|sports ?& ?outdoor recreation/i.test(text)) s-=2; // 비의류 도메인 감점
   var depth=(text.match(/>/g)||[]).length; s += Math.min(depth,4)*0.25; // 더 구체적인(깊은) 리프 선호 (스마트스토어 비-리프 회피)
   return s;
 }
@@ -304,8 +310,10 @@ async function processMarket(market, cls, chosenLog){
   var smartRefine=(market==='SMART' && (famOfBase(base)==='SHOES'||famOfBase(base)==='ACC'));
   var needSearch = !autoBest || conflictFam(base, autoBest.text) || smartRefine;
   if(needSearch){
-    // 검색어: gender+base, gender+계열일반, base, 계열일반 (좁은 base로 비거나 남성만 나오는 문제 보완)
-    var kws=[cls.keyword, famGeneralKw(base,gender), base, famGeneralKw(base,'')].filter(function(k,i,a){ return k && a.indexOf(k)===i; });
+    // 검색어: gender+base, gender+계열일반, base, 계열일반 (+ 영어권 마켓은 영어 키워드)
+    var kws=[cls.keyword, famGeneralKw(base,gender), base, famGeneralKw(base,'')];
+    if(ENGLISH_MARKETS[market]) kws=kws.concat(engKws(base));
+    kws=kws.filter(function(k,i,a){ return k && a.indexOf(k)===i; });
     for(var ki=0; ki<kws.length; ki++){
       var prev=listOpts(market).opts.map(function(o){return o.text;}).join('|');
       if(!doSearch(market, kws[ki])) continue;
