@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         더망고 카테고리매핑 자동(필터 순차 + 규칙기반 검수)
 // @namespace    solddeul.tmg
-// @version      1.1
+// @version      1.2
 // @description  검색필터 세부설정의 (오픈)마켓 카테고리 매핑을 자동화. 각 필터: 설정열기(admin_category_set.php)→AI자동매핑→11개 마켓을 규칙(금지어/브랜드 회피·성별 일치·11번가 해외+고시=의류)으로 재선택→fetch-POST 저장→다음. Zara(독일자라) 미매핑 필터만 대상. localStorage로 새로고침을 넘어 진행. 테스트(저장 안 함) 모드 지원. 팝업창은 건드리지 않음.
 // @match        https://tmg4682.mycafe24.com/mall/admin/admin_group.php*
 // @match        https://tmg4682.mycafe24.com/mall/admin/admin_category_set.php*
@@ -123,6 +123,13 @@ function conflictFam(base, text){
   if(fams.indexOf(ef)>=0) return false; // 기대 계열 포함 → 정상
   return fams.length>0;                 // 기대 계열 없이 다른 계열만 → 상충
 }
+// 계열 일반 검색어(base가 너무 좁아 검색이 비거나 남성만 나올 때 폭을 넓힘)
+var FAM_KW={BOTTOM:'바지',DRESS:'원피스',SKIRT:'스커트',OUTER:'자켓',TOP:'상의',SHOES:'신발',BAG:'가방',SWIM:'수영복'};
+function famGeneralKw(base, gender){
+  var ef=famOfBase(base); if(!ef || !FAM_KW[ef]) return null;
+  var g = gender==='W' ? '여성 ' : (gender==='M' ? '남성 ' : '');
+  return g+FAM_KW[ef];
+}
 
 // =========================================================================
 // 규칙: 후보 카테고리 텍스트가 이 마켓·성별에 허용되는가
@@ -151,6 +158,7 @@ function catScore(market, text, gender, base){
   var syn=BASE_SYN[base]; if(syn && syn.test(text)) s+=2;
   if(gender==='W' && /여성|Women/i.test(text)) s+=1;
   if(gender==='M' && /남성|Men/i.test(text)) s+=1;
+  var depth=(text.match(/>/g)||[]).length; s += Math.min(depth,4)*0.25; // 더 구체적인(깊은) 리프 선호 (스마트스토어 비-리프 회피)
   return s;
 }
 // 허용 후보 중 최고 점수 선택
@@ -260,37 +268,64 @@ function applyNotifyRefer(markets){
   });
 }
 
-// 키워드로 검색 후 최적 후보 반환(반환된 후보의 .i는 '검색 직후 현재 리스트' 기준으로만 유효)
-async function searchBest(market, keyword, gender, base){
-  var prev=listOpts(market).opts.map(function(o){return o.text;}).join('|');
-  if(!doSearch(market, keyword)) return null;
-  var opts=await waitSearch(market, prev);
-  return pickBest(market, opts, gender, base);
+// 마켓 전체목록(list2, 주로 11번가에만 채워짐)에서 최적 허용 후보
+function bestFromFull(market, gender, base){
+  var s=document.getElementById('openmarket_category_search_list2_'+market);
+  if(!s || s.options.length<10) return null;
+  var opts=Array.prototype.slice.call(s.options).map(function(o){ return {text:(o.text||'').trim(), val:o.value}; }).filter(function(o){ return o.text.indexOf('>')>=0; });
+  var ok=opts.filter(function(o){ return acceptable(market, o.text, gender); });
+  if(!ok.length) return null;
+  ok.sort(function(a,b){ return catScore(market,b.text,gender,base)-catScore(market,a.text,gender,base); });
+  return ok[0];
+}
+// 후보({text,val})를 결과목록에 주입 후 change로 커밋(검색/자동/전체목록 무관하게 커밋됨 — 라이브 검증)
+function commitInject(market, cand){
+  var sel=document.getElementById('openmarket_category_search_list_'+market);
+  if(!sel) return false;
+  var o=document.createElement('option'); o.value=cand.val; o.text=cand.text;
+  sel.appendChild(o); sel.value=cand.val;
+  sel.dispatchEvent(new Event('change',{bubbles:true}));
+  return true;
+}
+function bestOfPool(pool, market, gender, base){
+  if(!pool.length) return null;
+  pool.sort(function(a,b){ return catScore(market,b.text,gender,base)-catScore(market,a.text,gender,base); });
+  return pool[0];
 }
 async function processMarket(market, cls, chosenLog){
   var base=cls.base, gender=cls.gender;
   var cur=listOpts(market);
   if(!cur.sel){ return; } // 이 마켓이 페이지에 없음
-  // 1) 자동매핑 추천 중 허용되는 최적 후보
-  var best=pickBest(market, cur.opts, gender, base);
-  // 2) 후보가 없거나 '계열 상충'(예: 반바지→숏코트/구두/스커트)이면 키워드 검색으로 더 나은 후보 탐색.
-  //    ※ 검색은 select 옵션을 교체하므로, 자동매핑 후보는 포기하고 '검색 결과에서만' 선택한다.
-  if(!best || conflictFam(base, best.text)){
-    best=null;
-    var b1=await searchBest(market, cls.keyword, gender, base);   // 현재 리스트 = 키워드 결과
-    if(b1 && !conflictFam(base, b1.text)){ best=b1; }
-    else {
-      var b2=await searchBest(market, base, gender, base);        // 현재 리스트 = base 결과
-      if(b2 && (!b1 || catScore(market,b2.text,gender,base)>=catScore(market,b1.text,gender,base))){ best=b2; }
-      else if(b1){ best=await searchBest(market, cls.keyword, gender, base); } // b1이 더 나음 → 키워드 재검색으로 리스트 복원
-      else { best=b2; } // 둘 다 약하면 있는 것 사용(없으면 null)
+  // 후보 풀: 자동매핑 추천 중 허용된 것
+  var pool=[];
+  cur.opts.forEach(function(o){ if(acceptable(market,o.text,gender)) pool.push({text:o.text, val:o.val}); });
+  var autoBest=bestOfPool(pool.slice(), market, gender, base);
+  // 스마트스토어 신발/모자는 자동매핑이 비-리프(구버전) 노드를 골라 저장 후 "카테고리를 변경해주세요"로 무효표시되는 경우가 있어 항상 리프 검색으로 보완
+  var smartRefine=(market==='SMART' && (famOfBase(base)==='SHOES'||famOfBase(base)==='ACC'));
+  var needSearch = !autoBest || conflictFam(base, autoBest.text) || smartRefine;
+  if(needSearch){
+    // 검색어: gender+base, gender+계열일반, base, 계열일반 (좁은 base로 비거나 남성만 나오는 문제 보완)
+    var kws=[cls.keyword, famGeneralKw(base,gender), base, famGeneralKw(base,'')].filter(function(k,i,a){ return k && a.indexOf(k)===i; });
+    for(var ki=0; ki<kws.length; ki++){
+      var prev=listOpts(market).opts.map(function(o){return o.text;}).join('|');
+      if(!doSearch(market, kws[ki])) continue;
+      var opts=await waitSearch(market, prev);
+      opts.forEach(function(o){ if(acceptable(market,o.text,gender)) pool.push({text:o.text, val:o.val}); });
+      var cb=bestOfPool(pool.slice(), market, gender, base);
+      if(cb && !conflictFam(base, cb.text) && catScore(market,cb.text,gender,base)>=6) break; // 충분히 좋은 후보 확보 → 조기 종료
     }
   }
-  if(best){
-    selectOpt(market, best.i);
-    chosenLog[MLABEL[market]] = best.text;
+  var winner=bestOfPool(pool, market, gender, base);
+  // 검색으로도 허용/계열 정상 후보가 없으면 전체목록(11번가) 폴백
+  if(!winner || conflictFam(base, winner.text)){
+    var full=bestFromFull(market, gender, base);
+    if(full && (!winner || catScore(market,full.text,gender,base)>catScore(market,winner.text,gender,base))) winner=full;
+  }
+  if(winner){
+    commitInject(market, winner);
+    chosenLog[MLABEL[market]] = winner.text;
   } else {
-    // 아무 것도 허용 못함 → 현재 리스트 선택값 유지, 경고 로그
+    // 허용 후보 전무 → 현재 선택값 유지(경고 로그)
     var keep=listOpts(market); var cs=keep.sel? (keep.sel.options[keep.sel.selectedIndex]||{}).text:'';
     chosenLog[MLABEL[market]] = '(유지)'+(cs||'').trim();
   }
