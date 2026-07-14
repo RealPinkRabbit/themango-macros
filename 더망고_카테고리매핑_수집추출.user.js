@@ -16,6 +16,7 @@ var MLABEL={AUC20:'옥션',GMK20:'G마켓','11ST':'11번가',SMART:'스마트스
 function DIR(){ return location.pathname.replace(/[^/]+$/,''); }
 function q(s){ return document.querySelector(s); }
 function setStat(m){ var s=q('#tmgExStat'); if(s) s.textContent=m; }
+function stampNow(){ var d=new Date(), p=function(n){return String(n).padStart(2,'0');}; return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate())+'_'+p(d.getHours())+p(d.getMinutes()); }
 
 // ============ 상품유형/성별 분류 (본 매핑 매크로와 동일 규칙) ============
 function classify(name){
@@ -199,7 +200,7 @@ async function run(){
     }
     setStat('이상 케이스 분석 중...');
     var flags=analyze(rows);
-    var stamp=new Date().toISOString().slice(0,10);
+    var stamp=stampNow(); // 년월일_시분 (로컬시간)
     download('카테고리매핑_'+ (keyword||'전체') +'_'+stamp+'.csv', buildCSV(rows));
     download('이상케이스리포트_'+ (keyword||'전체') +'_'+stamp+'.txt', buildReport(rows, flags, keyword));
     var hard=flags.filter(function(f){return f.type!=='유형검토(추정)'&&f.type!=='미매핑';}).length;
