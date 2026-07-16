@@ -131,12 +131,24 @@ async function searchWait(m,kw){
   while(Date.now()-t0<7000){ await sleep(400); var o=optsOf(m); var sig=o.map(function(x){return x.t;}).join('|'); if(o.length && !/검색중/.test(sig) && sig!==prev) return o; prev=sig; }
   return optsOf(m);
 }
+// ★11ST(2026-07-15 실측): 사이트 search_category()는 국내/해외 라디오와 무관하게 '해외 트리'만 반환하고 이름으론 국내/해외 구분 불가 → 11번가는 admin_config_marketinfo.php를 seller_type2로 직접 호출해 종류별 트리를 수집(자동=독일자라는 기본 '해외', 해외=1/국내=2). 응답 JSON "코드@?@경로".
+var ELEVEN_TYPE_LS='tmg_auto_11st_type_v1';
+function eleven11Type(){ try{ return (localStorage.getItem(ELEVEN_TYPE_LS)==='국내')?'국내':'해외'; }catch(e){ return '해외'; } }   // 독일자라=해외 기본
+function set11stRadio(type){ var id=(type==='해외')?'openmarket_seller_type2_1':'openmarket_seller_type2_2'; var r=document.getElementById(id); if(r && !r.checked){ try{ r.click(); }catch(e){} } }
+async function marketInfo11st(kw, sellerType){
+  var body='pmode=search_category&site=11ST&search_text='+encodeURIComponent(kw)+'&seller_type2='+sellerType+'&openmarket_id=&from_category=Y';
+  var t=await fetch(DIR()+'admin_config_marketinfo.php',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/x-www-form-urlencoded;charset=UTF-8'},body:body}).then(function(r){return r.text();}).catch(function(){return '[]';});
+  var arr; try{ arr=JSON.parse(t); }catch(e){ arr=[]; }
+  return arr.map(function(s){ var p=String(s).split('@'); return {t:p.slice(2).join('@'), v:p[0]}; });
+}
 async function sweepMarket(m, onProg){
   var kws=SWEEP_KR.concat(ENGLISH_MARKETS[m]?SWEEP_EN:[]);
   var seen={}, cat=[];
   for(var i=0;i<kws.length;i++){
     if(onProg) onProg(i+1, kws.length);
-    var r=await searchWait(m, kws[i]);
+    var r;
+    if(m==='11ST'){ r=await marketInfo11st(kws[i], eleven11Type()==='해외'?'1':'2'); }   // ★11ST만 엔드포인트 직접 호출(해외=1/국내=2)
+    else { r=await searchWait(m, kws[i]); }
     r.forEach(function(o){ if(!seen[o.v] && isApparelCat(o.t)){ seen[o.v]=1; cat.push({path:o.t, code:o.v}); } });
   }
   cat.sort(function(a,b){ return a.path<b.path?-1:1; });
@@ -182,6 +194,7 @@ function applyNotifyRefer(markets){
 }
 function injectCode(m, code, text){
   var sel=document.getElementById('openmarket_category_search_list_'+m); if(!sel) return false;
+  if(m==='11ST'){ set11stRadio(eleven11Type()); }   // ★11번가 저장타입(해외/국내) 라디오 세팅 후 코드 주입
   var o=document.createElement('option'); o.value=code; o.text=text; sel.appendChild(o); sel.value=code;
   sel.dispatchEvent(new Event('change',{bubbles:true}));
   return true;
@@ -327,6 +340,9 @@ async function scanFilterActual(id){
     if(!/변경해\s*주세요/.test(txt) && txt.indexOf('>')<0) txt='';
     chosen[MLABEL[m]]=txt;
   });
+  // ★11ST: 저장 카테고리 코드/텍스트가 원시 HTML에 없을 수 있음(JS가 채움) → 저장 타입 라디오(seller_type2)로 판정
+  var r2=doc.getElementById('openmarket_seller_type2_2'); chosen.__11stType=(r2&&(r2.checked||r2.hasAttribute('checked')))?'국내':'해외';
+  if(!chosen['11번가']) chosen['11번가']='저장타입:'+chosen.__11stType;
   return chosen;
 }
 function csvq(s){ s=(s==null?'':String(s)); return '"'+s.replace(/"/g,'""')+'"'; }
@@ -343,7 +359,9 @@ async function runReadback(targetLabel){
     var gk=classify(queue[i].name).gender;
     var row=[queue[i].id, queue[i].name, gk].concat(MARKETS.map(function(m){ return ch[MLABEL[m]]||''; }));
     csv+=row.map(csvq).join(',')+'\n';
-    MARKETS.forEach(function(m){ var v=ch[MLABEL[m]]||''; if(!v) flags.push([queue[i].name,MLABEL[m],'미매핑']); else if(INVALID.test(v)) flags.push([queue[i].name,MLABEL[m],'사이트무효']); });
+    MARKETS.forEach(function(m){ var v=ch[MLABEL[m]]||'';
+      if(m==='11ST'){ if(ch.__11stType && ch.__11stType!==eleven11Type()) flags.push([queue[i].name,MLABEL[m],'규칙위반-11번가'+ch.__11stType+'(선택='+eleven11Type()+'여야함)']); return; }   // 11번가는 저장타입(국내/해외)으로 판정
+      if(!v) flags.push([queue[i].name,MLABEL[m],'미매핑']); else if(INVALID.test(v)) flags.push([queue[i].name,MLABEL[m],'사이트무효']); });
     if(i%10===9) await sleep(80);
   }
   var stamp=stampNow(); var tag=String(targetLabel).replace(/[^\w가-힣.]/g,'');
@@ -363,12 +381,14 @@ function panelList(){
   p.style.cssText='position:fixed;top:10px;right:10px;z-index:2147483647;background:#fff;border:2px solid #6f42c1;border-radius:8px;padding:10px 12px;width:330px;font:12px/1.6 "맑은 고딕",sans-serif;box-shadow:0 2px 10px rgba(0,0,0,.25)';
   p.innerHTML='<div style="font-weight:bold;margin-bottom:6px">카테고리매핑 자동 · 파일기반 v1</div>'
    +'<div style="margin-bottom:6px">대상 라벨: <input id="tmgTarget" type="text" value="독일자라" style="width:110px"> <label style="font-size:11px"><input type="checkbox" id="tmgUnmapped"> 미매핑만</label></div>'
+   +'<div style="margin-bottom:6px">11번가 카테고리: <select id="tmg11stType"><option value="해외">해외</option><option value="국내">국내</option></select> <span style="color:#888;font-size:11px">독일자라=해외</span></div>'
    +'<div style="margin-bottom:6px;border-top:1px solid #eee;padding-top:6px"><b>① 수집(Export)</b><br><button id="tmgExport">카탈로그+대상 엑셀 내보내기</button><br><span style="color:#888;font-size:11px">마켓 검색이 필요해 설정페이지로 이동해 수집(수 분 소요).</span></div>'
    +'<div style="margin-bottom:6px;border-top:1px solid #eee;padding-top:6px"><b>③ 적용(Apply)</b><br><input type="file" id="tmgFile" accept=".xlsx"><br><button id="tmgApply">매핑파일대로 적용 시작</button> <button id="tmgStop" style="color:#d9534f">정지</button></div>'
    +'<div style="border-top:1px solid #eee;padding-top:6px"><button id="tmgEval">실제 저장값 되읽기 검증</button></div>'
    +'<div id="tmgStat" style="margin-top:8px;color:#333;min-height:32px">대기중</div>'
    +'<div style="margin-top:6px;color:#888;font-size:11px">순서: ①엑셀 내보내기 → Claude가 매핑 시트 채움 → ③그 엑셀 불러와 적용 → 되읽기 검증. 진행 중 페이지 이동/팝업은 건드리지 마세요.</div>';
   document.body.appendChild(p);
+  var t11=q('#tmg11stType'); if(t11){ t11.value=eleven11Type(); t11.onchange=function(){ try{ localStorage.setItem(ELEVEN_TYPE_LS, t11.value==='국내'?'국내':'해외'); }catch(e){} setStat('11번가 카테고리 종류 = '+t11.value+' (수집·적용·평가에 반영)'); }; }
   q('#tmgExport').onclick=async function(){
     var target=(q('#tmgTarget').value||'').trim()||'독일자라';
     var onlyU=q('#tmgUnmapped').checked;
@@ -402,7 +422,7 @@ function panelList(){
 function panelSetExport(){
   if(q('#tmgSetPanel')) return;
   var p=document.createElement('div'); p.id='tmgSetPanel';
-  p.style.cssText='position:fixed;top:10px;right:10px;z-index:2147483647;background:#fff;border:2px solid #6f42c1;border-radius:8px;padding:10px 12px;width:330px;font:12px/1.5 "맑은 고딕",sans-serif;box-shadow:0 2px 10px rgba(0,0,0,.25)';
+  p.style.cssText='position:fixed;top:10px;right:10px;z-index:2147483647;background:#fff;border:2px solid #6f42c1;border-radius:8px;padding:10px 12px;width:320px;font:12px/1.5 "맑은 고딕",sans-serif;box-shadow:0 2px 10px rgba(0,0,0,.25)';
   p.innerHTML='<div style="font-weight:bold">카탈로그 수집(Export) 진행중</div><div id="tmgStat" style="margin-top:6px;color:#333;min-height:40px"></div>';
   document.body.appendChild(p);
 }
@@ -414,7 +434,6 @@ function panelMini(state){
   document.body.appendChild(p);
   q('#tmgStop2').onclick=function(){ var s=gs(); if(s){ s.running=false; ss(s); } setStat('정지 요청됨 — 현재 항목 후 멈춤.'); };
 }
-
 function boot(){
   if(location.pathname.indexOf('admin_group.php')>=0){ panelList(); return; }
   if(location.pathname.indexOf('admin_category_set.php')>=0){
