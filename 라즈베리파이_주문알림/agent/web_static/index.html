@@ -128,6 +128,9 @@
   }
   function clearAlert() {
     alertEv = null;
+    // ★ 로컬 status 에서도 alert 을 지운다. 안 그러면 1초마다 도는 render() 가
+    //   지난 status 를 보고 경고화면을 되살려, 서버의 다음 status 푸시(10초)까지 깜빡인다.
+    if (status) status.alert = null;
     document.body.classList.remove("alert", "cs");
   }
 
@@ -140,8 +143,10 @@
   }
 
   function ack() {
-    fetch("/api/ack", { method: "POST" }).catch(function () {});
+    // 터치스크린은 touchstart 와 click 이 연달아 오므로 중복 호출을 막는다
+    if (!alertEv) return;
     clearAlert();
+    fetch("/api/ack", { method: "POST" }).catch(function () {});
   }
 
   function connect() {

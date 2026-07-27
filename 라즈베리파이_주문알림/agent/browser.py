@@ -215,15 +215,20 @@ class Browser:
         log.info("로그인 시도")
         self.get(self.cfg.get("site.login_path"))
         time.sleep(1.5)                                   # grecaptcha 로딩 여유
+        # ★ 로그인 입력칸에는 id 속성이 없다(name 만 있음). getElementById 는 null 을 돌려준다.
+        #   또 HTML 이 깨져 있어 input 들이 DOM 상 <form> 바깥(td)에 놓이지만,
+        #   form.elements 에는 정상적으로 포함되므로 requestSubmit() 으로 함께 전송된다.
         self.js(
-            "document.getElementById('login_id').value = arguments[0];"
-            "document.getElementById('login_pass').value = arguments[1];",
+            "var id = document.querySelector('input[name=login_id]');"
+            "var pw = document.querySelector('input[name=login_pass]');"
+            "if (!id || !pw) { throw new Error('로그인 입력칸을 찾지 못했습니다'); }"
+            "id.value = arguments[0]; pw.value = arguments[1];",
             uid, pw,
         )
         # 페이지의 onsubmit 핸들러(onSubmitLoginForm)가 reCAPTCHA v3 토큰을 만들어 넣고 제출한다.
         # 그래서 form.submit() 이 아니라 requestSubmit() 으로 submit 이벤트를 발생시켜야 한다.
         self.js(
-            "var f = document.getElementById('loginForm');"
+            "var f = document.getElementById('loginForm') || document.forms['morning_main_login'];"
             "if (f.requestSubmit) { f.requestSubmit(); }"
             "else { f.dispatchEvent(new Event('submit', {cancelable:true, bubbles:true})); }"
         )

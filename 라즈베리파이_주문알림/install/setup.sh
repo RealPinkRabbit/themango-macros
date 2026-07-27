@@ -152,6 +152,17 @@ sudo -u "$RUN_USER" XDG_RUNTIME_DIR="/run/user/$RUN_UID" systemctl --user enable
 # ---------------------------------------------------------------- 8. 키오스크
 say "8/9 키오스크 화면 설정"
 CHROME_BIN="$(command -v chromium || command -v chromium-browser)"
+
+# ★ Xorg 래퍼 권한 — 이게 없으면 비root 사용자의 X 실행이 거부된다.
+#   증상: tmg-kiosk 가 오류 메시지 없이 즉시 종료 → RestartSec 주기로 화면이 깜빡이며
+#   로그인 프롬프트가 반복 표시된다. (오류는 journal 이 아니라 tty1 로 나가서 안 보인다)
+cat > /etc/X11/Xwrapper.config <<'EOF'
+allowed_users=anybody
+needs_root_rights=yes
+EOF
+usermod -aG video,input,tty,render "$RUN_USER" 2>/dev/null || \
+  usermod -aG video,input,tty "$RUN_USER"
+
 mkdir -p "$APP_DIR/kiosk"
 cat > "$APP_DIR/kiosk/xinitrc" <<EOF
 #!/bin/sh
@@ -252,8 +263,13 @@ EOF
 cat > /etc/systemd/system/tmg-kiosk.service <<EOF
 [Unit]
 Description=TMG LCD 알림판 (Chromium 키오스크)
-After=tmg-agent.service systemd-user-sessions.service
+After=tmg-agent.service systemd-user-sessions.service getty@tty1.service
 Wants=tmg-agent.service
+# tty1 을 getty 와 동시에 잡으면 서로 화면을 뺏는다
+Conflicts=getty@tty1.service
+# 실패해도 무한 재시작하지 않게 (깜빡임 무한반복 방지)
+StartLimitIntervalSec=300
+StartLimitBurst=5
 
 [Service]
 User=$RUN_USER
@@ -265,7 +281,7 @@ StandardInput=tty
 Environment=XDG_RUNTIME_DIR=/run/user/$RUN_UID
 ExecStart=/usr/bin/startx $APP_DIR/kiosk/xinitrc -- :0 vt1 -keeptty -nocursor
 Restart=always
-RestartSec=5
+RestartSec=10
 
 [Install]
 WantedBy=multi-user.target
