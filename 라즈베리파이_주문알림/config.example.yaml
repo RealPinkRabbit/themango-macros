@@ -1,0 +1,70 @@
+# /etc/tmg-alert/config.yaml
+# setup.sh 가 이 파일을 /etc/tmg-alert/config.yaml 로 복사합니다. 값을 채운 뒤 서비스를 재시작하세요.
+
+site:
+  base_url: "https://tmg4682.mycafe24.com/mall"
+  admin_path: "/admin"
+  login_path: "/admin/admin_login.php"
+  # 로그인 성공 여부 판정용: 로그인 페이지에만 있는 문자열
+  login_marker: "login_pass"
+  login_id: "여기에_아이디"
+  login_pw: "여기에_비밀번호#"
+  # 배지 폴링에 쓸 가벼운 페이지 (상단 메뉴는 모든 관리자 페이지에 공통으로 들어감)
+  poll_path: "/admin/admin_getorder.php"
+
+schedule:
+  market_fetch_min: 5        # '전체마켓 가져오기' 실행 주기 (분)
+  badge_watch_sec: 60        # 신규 건수(배지) 확인 주기 (초)
+  order_list_sec: 0          # 0 = 비활성 (README 8장 2순위용)
+  example_collect_sec: 0     # 0 = 비활성 (향후 수집 매크로 예시)
+
+browser:
+  # 비워두면 자동 탐색: /usr/bin/chromium, /usr/bin/chromium-browser ...
+  binary: ""
+  driver: ""
+  display: ":99"
+  profile_dir: "/dev/shm/tmg-profile"     # SD 쓰기 방지: 반드시 RAM 경로
+  cache_dir: "/dev/shm/tmg-cache"
+  download_dir: "/dev/shm/tmg-downloads"
+  window_size: "1280,900"
+  page_load_timeout: 120
+  restart_every: 40          # 태스크 N회 실행마다 브라우저 재시작 (메모리 누수 방지)
+  # 압축 해제된 확장 폴더 경로 (--load-extension).
+  # 상품업데이트(admin_goods_update.php)는 더망고 크롬 확장이 있어야 동작한다.
+  # 예: ["/opt/tmg-alert/extensions/themango"]  (README '확장 설치' 절 참고)
+  extensions: []
+
+fetch:
+  min_sec: 20                # 가져오기 최소 대기 시간
+  quiet_sec: 25              # 결과영역이 이 시간 동안 변하지 않으면 완료로 판정
+  max_sec: 600               # 하드 타임아웃
+  done_text: ""              # 명확한 완료 문구를 알아내면 여기에 (예: "완료되었습니다")
+
+notify:
+  sound_dir: "/opt/tmg-alert/sounds"
+  sound_new_order: "order.wav"
+  sound_new_cs: "cs.wav"
+  sound_error: "error.wav"
+  play_cmd: "paplay {file}"          # PipeWire/PulseAudio. alsa면 "aplay {file}"
+  repeat_until_ack: true
+  repeat_interval_sec: 30
+  quiet_hours: []                    # 예: ["23:30-07:00"] — 이 시간엔 소리만 끄고 화면은 유지
+  bt_mac: ""                         # 블루투스 스피커 MAC. 비우면 재연결/킵얼라이브 안 함
+  bt_keepalive_sec: 120              # 무음 재생으로 스피커 절전 방지 (0 = 끔)
+  extra_cmd: ""                      # 필요 시 추가 알림 명령 (예: 'zenity --warning --text="{title}"')
+
+web:
+  host: "0.0.0.0"            # 폰/PC에서도 보려면 0.0.0.0, 파이에서만 보려면 127.0.0.1
+  port: 8080
+
+state:
+  ram_path: "/run/tmg-alert/state.json"
+  disk_path: "/var/lib/tmg-alert/state.json"
+  flush_min_interval_sec: 3600        # SD 저장 최소 간격 (초). 0이면 종료 시에만 저장
+
+order_list:                  # README 8장 2순위. 배지로 주문 감지가 안 될 때만 채운다
+  url: ""                    # 예: "/admin/admin_getorder.php?search_date=today"
+  row_regex: ""              # 주문번호를 잡는 정규식 (그룹 1 = 키). 예: "order_no=(\\d+)"
+
+log:
+  level: "INFO"              # DEBUG / INFO / WARNING

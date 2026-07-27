@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>더망고 주문 알림판</title>
+<style>
+  :root { --bg:#0b0e14; --fg:#e6edf3; --dim:#7d8590; --ok:#3fb950; --warn:#d29922; --bad:#f85149; }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  html,body { height:100%; }
+  body {
+    background:var(--bg); color:var(--fg); font-family:"Noto Sans KR",system-ui,sans-serif;
+    height:100vh; overflow:hidden; user-select:none; cursor:none;
+    display:flex; flex-direction:column;
+  }
+  body.alert { animation: flash 1s steps(1,end) infinite; }
+  @keyframes flash { 0% { background:#7a0f0f; } 50% { background:#c1121f; } }
+  body.alert.cs { animation-name: flashcs; }
+  @keyframes flashcs { 0% { background:#7a4a0f; } 50% { background:#c17a12; } }
+
+  /* 대기 화면 */
+  #idle { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:1.2rem; }
+  #clock { font-size:14vw; font-weight:200; letter-spacing:-0.02em; line-height:1; }
+  #date { font-size:2.4vw; color:var(--dim); }
+  #idle .quiet { font-size:2vw; color:var(--dim); }
+
+  /* 알림 화면 */
+  #alert { flex:1; display:none; flex-direction:column; align-items:center; justify-content:center; gap:2vh; text-align:center; }
+  body.alert #idle { display:none; }
+  body.alert #alert { display:flex; }
+  #alertTitle { font-size:11vw; font-weight:800; text-shadow:0 4px 24px rgba(0,0,0,.5); }
+  #alertBody  { font-size:3vw; opacity:.9; }
+  #alertTime  { font-size:2vw; opacity:.7; }
+  #ackBtn {
+    margin-top:2vh; padding:1.6vh 5vw; font-size:3.2vw; font-weight:700; border:none; border-radius:1vw;
+    background:#fff; color:#111; cursor:pointer;
+  }
+
+  /* 하단 상태바 */
+  #bar { display:flex; gap:1.6vw; align-items:center; padding:1.2vh 2vw; font-size:1.5vw;
+         background:rgba(0,0,0,.35); color:var(--fg); }
+  #bar .sp { margin-left:auto; }
+  .dot { display:inline-block; width:.9vw; height:.9vw; border-radius:50%; margin-right:.5vw; vertical-align:middle; }
+  .dot.ok { background:var(--ok); } .dot.warn { background:var(--warn); } .dot.bad { background:var(--bad); }
+  #recent { position:absolute; right:2vw; top:2vh; width:26vw; max-height:40vh; overflow:hidden;
+            font-size:1.3vw; color:var(--dim); text-align:right; line-height:1.6; }
+  body.alert #recent { display:none; }
+</style>
+</head>
+<body>
+  <div id="recent"></div>
+
+  <div id="idle">
+    <div id="clock">--:--</div>
+    <div id="date">연결 중…</div>
+    <div class="quiet" id="idleNote"></div>
+  </div>
+
+  <div id="alert">
+    <div id="alertTitle">신규 주문</div>
+    <div id="alertBody"></div>
+    <div id="alertTime"></div>
+    <button id="ackBtn">확인 (아무 키나 화면 터치)</button>
+  </div>
+
+  <div id="bar">
+    <span><span class="dot" id="dotConn"></span>서버</span>
+    <span><span class="dot" id="dotLogin"></span>로그인</span>
+    <span><span class="dot" id="dotBt"></span>스피커</span>
+    <span id="badgeInfo"></span>
+    <span class="sp" id="fetchInfo"></span>
+    <span id="nextInfo"></span>
+  </div>
+
+<script>
+(function () {
+  var el = function (id) { return document.getElementById(id); };
+  var status = null, alertEv = null, es = null, connected = false;
+
+  function pad(n) { return (n < 10 ? "0" : "") + n; }
+  function ago(ts) {
+    if (!ts) return "-";
+    var s = Math.max(0, Math.floor(Date.now() / 1000 - ts));
+    if (s < 60) return s + "초 전";
+    if (s < 3600) return Math.floor(s / 60) + "분 전";
+    return Math.floor(s / 3600) + "시간 전";
+  }
+  function dot(id, cls) { el(id).className = "dot " + cls; }
+
+  function tickClock() {
+    var d = new Date();
+    el("clock").textContent = pad(d.getHours()) + ":" + pad(d.getMinutes());
+    el("date").textContent = d.getFullYear() + "." + pad(d.getMonth() + 1) + "." + pad(d.getDate()) +
+      " (" + "일월화수목금토".charAt(d.getDay()) + ")";
+    // 번인 방지: 시계를 아주 조금씩 움직인다
+    el("idle").style.transform = "translate(" + ((d.getMinutes() % 6) - 3) + "px," +
+      ((d.getMinutes() % 4) - 2) + "px)";
+  }
+
+  function render() {
+    if (!status) return;
+    dot("dotConn", connected ? "ok" : "bad");
+    dot("dotLogin", status.logged_in ? "ok" : "warn");
+    dot("dotBt", status.bt_connected === true ? "ok" : (status.bt_connected === false ? "bad" : "warn"));
+
+    var b = status.badges || {}, parts = [];
+    Object.keys(b).forEach(function (k) { if (b[k] > 0) parts.push(k + " " + b[k]); });
+    el("badgeInfo").textContent = parts.length ? "미처리: " + parts.join(" · ") : "미처리 없음";
+    el("fetchInfo").textContent = "마지막 가져오기 " + ago(status.last_fetch_ts);
+
+    var next = null;
+    ((status.scheduler || {}).tasks || []).forEach(function (t) {
+      if (t.name === "market_fetch") next = t.next_in_sec;
+    });
+    el("nextInfo").textContent = next === null ? "" : "다음 " + Math.ceil(next / 60) + "분";
+    el("idleNote").textContent = parts.length ? ("미처리 " + parts.join(" · ")) : "";
+
+    if (status.alert) { showAlert(status.alert); } else { clearAlert(); }
+  }
+
+  function showAlert(ev) {
+    alertEv = ev;
+    document.body.classList.add("alert");
+    document.body.classList.toggle("cs", ev.kind === "new_cs");
+    el("alertTitle").textContent = ev.title;
+    el("alertBody").textContent = ev.body || "";
+    el("alertTime").textContent = ev.time_str || "";
+  }
+  function clearAlert() {
+    alertEv = null;
+    document.body.classList.remove("alert", "cs");
+  }
+
+  function pushRecent(ev) {
+    var box = el("recent");
+    var line = document.createElement("div");
+    line.textContent = (ev.time_str || "") + "  " + ev.title;
+    box.insertBefore(line, box.firstChild);
+    while (box.childNodes.length > 12) box.removeChild(box.lastChild);
+  }
+
+  function ack() {
+    fetch("/api/ack", { method: "POST" }).catch(function () {});
+    clearAlert();
+  }
+
+  function connect() {
+    if (es) { try { es.close(); } catch (e) {} }
+    es = new EventSource("/events");
+    es.onopen = function () { connected = true; render(); };
+    es.onerror = function () { connected = false; render(); setTimeout(connect, 3000); };
+    es.onmessage = function (m) {
+      var d = JSON.parse(m.data);
+      if (d.type === "init") {
+        status = d.status; (d.recent || []).slice().reverse().forEach(pushRecent);
+      } else if (d.type === "status") {
+        status = d.status;
+      } else if (d.type === "event") {
+        pushRecent(d.event);
+        if (d.event.is_alert) showAlert(d.event);
+      } else if (d.type === "ack") {
+        clearAlert();
+      }
+      render();
+    };
+  }
+
+  el("ackBtn").addEventListener("click", ack);
+  document.addEventListener("keydown", function () { if (alertEv) ack(); });
+  document.addEventListener("click", function () { if (alertEv) ack(); });
+  document.addEventListener("touchstart", function () { if (alertEv) ack(); });
+
+  tickClock();
+  setInterval(tickClock, 1000);
+  setInterval(render, 1000);
+  connect();
+})();
+</script>
+</body>
+</html>
