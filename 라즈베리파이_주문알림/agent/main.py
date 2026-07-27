@@ -67,7 +67,7 @@ def main(argv=None):
             "last_badge_check": s.get("last_badge_check"),
             "last_fetch_ts": s.get("last_fetch_ts"),
             "last_fetch_summary": s.get("last_fetch_summary", ""),
-            "bt_connected": s.get("bt_connected"),
+            "speaker_ok": s.get("speaker_ok"),
             "logged_in": bool(http.has_cookies),
             "alert": active.to_dict() if active else None,
             "scheduler": st,

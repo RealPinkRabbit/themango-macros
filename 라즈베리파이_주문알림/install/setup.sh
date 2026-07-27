@@ -28,7 +28,7 @@ apt-get update
 apt-get install -y --no-install-recommends \
   python3 python3-venv python3-pip \
   xvfb xserver-xorg xinit x11-xserver-utils openbox unclutter \
-  bluez pipewire pipewire-pulse wireplumber pulseaudio-utils \
+  pipewire pipewire-pulse wireplumber pulseaudio-utils \
   ca-certificates curl dbus-x11
 
 # 한글 폰트 — Lite 에는 CJK 폰트가 없어서 관리자 화면이 전부 □ 로 보인다.
@@ -142,9 +142,9 @@ if [[ -f $BOOTCFG ]] && ! grep -q "^dtparam=watchdog=on" "$BOOTCFG"; then
 fi
 echo "  하드웨어 워치독 활성 (시스템 전체 프리즈 시 자동 리셋)"
 
-# ---------------------------------------------------------------- 7. 오디오/블루투스
-say "7/9 오디오·블루투스 권한"
-usermod -aG bluetooth,audio,video,tty "$RUN_USER" || true
+# ---------------------------------------------------------------- 7. 오디오
+say "7/9 오디오 권한 (유선 스피커 — USB 또는 3.5mm)"
+usermod -aG audio,video,tty "$RUN_USER" || true
 loginctl enable-linger "$RUN_USER"        # 로그인 없이도 PipeWire 사용자 세션이 돌게
 sudo -u "$RUN_USER" XDG_RUNTIME_DIR="/run/user/$RUN_UID" systemctl --user enable pipewire pipewire-pulse wireplumber 2>/dev/null || \
   warn "PipeWire 사용자 서비스 활성화는 재부팅 후 자동으로 됩니다"
@@ -316,12 +316,12 @@ cat <<EOF
 ────────────────────────────────────────────────────────────
  설치 완료
 
- 1) 설정을 채우세요 (아이디/비밀번호/스피커 MAC/주기)
+ 1) 설정을 채우세요 (아이디/비밀번호/주기)
       sudo nano $CFG_DIR/config.yaml
 
- 2) 블루투스 스피커 페어링 (trust 를 꼭 하세요)
-      bluetoothctl
-        power on / scan on / pair MAC / trust MAC / connect MAC / quit
+ 2) 스피커를 USB(또는 3.5mm)로 연결하고 확인
+      pactl list short sinks       # 출력 장치 목록
+      speaker-test -t sine -f 440 -l 1
 
  3) 재부팅
       sudo reboot

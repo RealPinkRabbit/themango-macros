@@ -45,12 +45,17 @@ notify:
   sound_new_order: "order.wav"
   sound_new_cs: "cs.wav"
   sound_error: "error.wav"
+  # 유선 스피커(USB 또는 3.5mm)를 씁니다. 블루투스는 쓰지 않습니다.
   play_cmd: "paplay {file}"          # PipeWire/PulseAudio. alsa면 "aplay {file}"
+  # 출력 장치를 고정하고 싶으면 (예: HDMI 로 새는 것 방지)
+  #   play_cmd: "paplay --device=alsa_output.usb-XXXX.analog-stereo {file}"
+  #   장치 이름은 파이에서 `pactl list short sinks` 로 확인
   repeat_until_ack: true
   repeat_interval_sec: 30
   quiet_hours: []                    # 예: ["23:30-07:00"] — 이 시간엔 소리만 끄고 화면은 유지
-  bt_mac: ""                         # 블루투스 스피커 MAC. 비우면 재연결/킵얼라이브 안 함
-  bt_keepalive_sec: 120              # 무음 재생으로 스피커 절전 방지 (0 = 끔)
+  sink_match: ""                     # 이 문자열이 든 출력 장치가 있어야 '스피커 정상'으로 표시
+                                     # (예: "usb"). 비우면 장치가 하나라도 있으면 정상
+  keepalive_sec: 120                 # 무음 재생으로 스피커 절전 방지 (0 = 끔)
   extra_cmd: ""                      # 필요 시 추가 알림 명령 (예: 'zenity --warning --text="{title}"')
 
 web:

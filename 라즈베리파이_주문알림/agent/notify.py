@@ -1,8 +1,10 @@
-"""알림 — 블루투스 스피커 소리 + (대시보드는 web.py 가 담당).
+"""알림 — 유선(USB / 3.5mm) 스피커 소리 + (대시보드는 web.py 가 담당).
 
 - 알림은 '확인(ACK)' 전까지 일정 간격으로 반복 재생한다. 자리를 비웠다 돌아와도 놓치지 않게.
 - 조용한 시간대(quiet_hours)에는 소리만 끄고 화면 알림은 유지한다.
-- 블루투스 스피커는 절전으로 잘 끊긴다 → ① 주기적 연결 확인 ② 무음 킵얼라이브 재생.
+- 블루투스는 쓰지 않는다. 파이4는 2.4GHz Wi-Fi 와 BT 가 같은 칩이라 간섭하고,
+  연결이 끊겨도 '소리만 안 나는' 조용한 실패가 되기 때문. 유선은 꽂혀 있으면 울린다.
+- 액티브 스피커도 무신호가 이어지면 절전에 드는 제품이 있어 무음 킵얼라이브는 유지한다.
 """
 from __future__ import annotations
 
@@ -63,7 +65,7 @@ class Notifier:
         self.bus = bus
         self.state = state
         self.active = None            # 확인 대기 중인 알림
-        self.bt_connected = None
+        self.speaker_ok = None
         self._stop = threading.Event()
         self._lock = threading.Lock()
         bus.subscribe(self.on_event)
@@ -119,7 +121,7 @@ class Notifier:
     # ------------------------------------------------------------------ 백그라운드
     def start(self):
         threading.Thread(target=self._repeat_loop, name="notify-repeat", daemon=True).start()
-        threading.Thread(target=self._bt_loop, name="notify-bt", daemon=True).start()
+        threading.Thread(target=self._audio_loop, name="notify-audio", daemon=True).start()
 
     def stop(self):
         self._stop.set()
@@ -134,15 +136,17 @@ class Notifier:
             if ev is not None:
                 self._play_for(ev)
 
-    def _bt_loop(self):
-        mac = str(self.cfg.get("notify.bt_mac", "") or "")
-        keepalive = int(self.cfg.get("notify.bt_keepalive_sec", 120) or 0)
+    def _audio_loop(self):
+        keepalive = int(self.cfg.get("notify.keepalive_sec", 120) or 0)
         _make_silence()
         last_keepalive = 0.0
+        prev = None
         while not self._stop.wait(20):
-            if mac:
-                self.bt_connected = self._bt_check_connect(mac)
-                self.state.set("bt_connected", bool(self.bt_connected))
+            self.speaker_ok = self._check_speaker()
+            self.state.set("speaker_ok", bool(self.speaker_ok))
+            if prev is not None and prev != self.speaker_ok:
+                log.warning("오디오 출력 장치 상태 변화: %s", "정상" if self.speaker_ok else "없음")
+            prev = self.speaker_ok
             if keepalive and time.time() - last_keepalive >= keepalive:
                 last_keepalive = time.time()
                 with self._lock:
@@ -150,16 +154,22 @@ class Notifier:
                 if not busy:
                     self._play_file(SILENCE_WAV, timeout=10)   # 스피커 절전 방지
 
-    def _bt_check_connect(self, mac: str) -> bool:
+    def _check_speaker(self) -> bool:
+        """오디오 출력 장치(싱크)가 살아 있는지 확인.
+
+        USB 스피커를 뽑거나 인식이 풀리면 싱크가 사라진다. sink_match 를 설정하면
+        그 문자열이 들어간 싱크가 있을 때만 정상으로 본다(HDMI 로 새는 것 방지).
+        """
         try:
-            out = subprocess.run(["bluetoothctl", "info", mac], capture_output=True,
-                                 text=True, timeout=15).stdout
-        except Exception:
+            out = subprocess.run(["pactl", "list", "short", "sinks"],
+                                 capture_output=True, text=True, timeout=10).stdout
+        except Exception as e:
+            log.warning("오디오 장치 확인 실패: %s", e)
             return False
-        if "Connected: yes" in out:
-            return True
-        log.warning("블루투스 스피커 연결 끊김 — 재연결 시도: %s", mac)
-        with contextlib.suppress(Exception):
-            subprocess.run(["bluetoothctl", "connect", mac], capture_output=True,
-                           text=True, timeout=25)
-        return False
+        lines = [ln for ln in out.splitlines() if ln.strip()]
+        if not lines:
+            return False
+        want = str(self.cfg.get("notify.sink_match", "") or "").lower()
+        if want:
+            return any(want in ln.lower() for ln in lines)
+        return True
