@@ -1,8 +1,8 @@
 # 라즈베리파이 24시간 주문/CS 알림 시스템 — 설계 및 로드맵
 
-> 대상: 라즈베리파이 4 모델B 4GB + micro SD Pro Endurance 64GB + 블루투스 스피커 + LCD 패널
+> 대상: 라즈베리파이 4 모델B 4GB + micro SD Pro Endurance 64GB + 유선 스피커(USB 또는 3.5mm) + LCD 패널
 > 목적: `admin_getorder.php`의 **전체마켓 가져오기**를 n분마다 실행하고, 신규 주문/클레임/문의가 생기면
-> **소리(BT 스피커) + 화면(LCD)** 으로 즉시 알린다. 24시간 무중단, SD카드 쓰기 최소화.
+> **소리(유선 스피커) + 화면(LCD)** 으로 즉시 알린다. 24시간 무중단, SD카드 쓰기 최소화.
 
 ---
 
@@ -51,7 +51,7 @@
 │  │   ├─ HttpSession    requests + 브라우저에서 복사한 쿠키  (배지 폴링 / 목록 파싱)         │
 │  │   ├─ Scheduler      태스크별 주기 실행, 실패 백오프, 브라우저 주기적 재시작              │
 │  │   ├─ EventBus       new_order / new_cs / error / status 이벤트                           │
-│  │   ├─ Notifier       ① 오디오(BT 스피커, 확인 전까지 반복) ② 대시보드 푸시(SSE)          │
+│  │   ├─ Notifier       ① 오디오(유선 스피커, 확인 전까지 반복) ② 대시보드 푸시(SSE)        │
 │  │   └─ WebServer      127.0.0.1:8080 (표준 라이브러리, 의존성 0)                          │
 │  │                                                                                         │
 │  └─ tmg-kiosk.service     Xorg :0 + openbox + Chromium --kiosk http://127.0.0.1:8080       │
@@ -60,9 +60,9 @@
 │  RAM(tmpfs)만 사용: /tmp /var/tmp /var/log /run  · journald=volatile · swap off             │
 │  SD 쓰기: 설정파일 읽기 + 상태 스냅샷(최대 1시간에 1회) 뿐                                  │
 └────────────────────────────────────────────────────────────────────────────────────────────┘
-        │ Wi-Fi/유선                                   │ BlueZ + PipeWire (A2DP)
+        │ Wi-Fi/유선                                   │ PipeWire → USB 오디오
         ▼                                              ▼
-  더망고 관리자                                    블루투스 스피커
+  더망고 관리자                                    유선 스피커 (USB)
 ```
 
 **왜 자동화용 화면(:99)과 표시용 화면(:0)을 나누는가**
@@ -143,7 +143,7 @@ LCD에는 알림판만 남는다. 그러면서도 **완전 헤드리스가 아�
            ※ 가져오기가 끝나면 서버 배지가 갱신되므로, 실제 알림은 다음 badge_watch가 즉시 잡는다
 
 이벤트 발생  → EventBus
-              ├ 오디오: BT 스피커로 효과음 (확인 전까지 30초마다 반복)
+              ├ 오디오: 유선 스피커로 효과음 (확인 전까지 30초마다 반복)
               └ 대시보드: SSE 푸시 → LCD 화면 전체가 알림 모드로 전환
 사용자 확인  → 화면 터치/클릭/아무 키 → ACK → 소리 정지, 대기화면 복귀
 
@@ -200,8 +200,8 @@ awk '{print $3, $10*512/1024/1024" MB written"}' /proc/diskstats | grep -E 'mmcb
 | 세션 만료 / 로그아웃 | 배지 파싱이 로그인 폼을 감지하면 즉시 브라우저 재로그인 → 쿠키 재복사 |
 | **reCAPTCHA 챌린지 등장** | 자동 해결 시도 안 함. `error` 이벤트로 소리+화면 알림("사람이 로그인해야 함") 후 백오프 재시도 |
 | 네트워크 끊김 | 태스크 실패 → 지수 백오프(최대 10분), 복구되면 자동 정상화. 화면 상태 점이 빨강으로 |
-| **블루투스 스피커가 절전으로 끊김** | ① 기기 `trust` 등록 ② 재연결 루프 ③ **2분마다 무음 킵얼라이브 재생**(스피커 절전 진입 자체를 방지) |
-| BT ↔ Wi-Fi 2.4GHz 간섭 (파이4의 고질) | Wi-Fi를 **5GHz 대역**으로 고정하거나 **유선 랜** 사용 권장. 2.4GHz + BT 오디오는 끊김이 잦음 |
+| **스피커가 절전으로 잠듦** | **2분마다 무음 킵얼라이브 재생**(`notify.keepalive_sec`) — 액티브 스피커도 무신호가 이어지면 잠드는 제품이 있다 |
+| **스피커가 빠지거나 인식이 풀림** | 20초마다 `pactl list short sinks` 로 출력 장치 생존 확인 → 사라지면 상태 `speaker_ok=false`, 알림판 표시등 빨강. 유선이라 "소리만 안 나는 조용한 실패"를 눈으로 잡아낼 수 있다 |
 | 정전 후 파일시스템 손상 | 위 4장 조치로 쓰기 자체가 거의 없어 손상 확률이 크게 낮아짐. + 11번(읽기전용) 적용 시 사실상 면역 |
 | 원인 모를 누적 열화 | 주 1회 새벽 예방 재부팅 타이머(기본 일요일 04:30, 끌 수 있음) |
 | 화면 꺼짐/번인 | `xset s off -dpms`로 절전 해제, 대기 화면은 어둡게 + 요소 위치를 분 단위로 미세 이동 |
@@ -317,7 +317,7 @@ sudo systemctl restart tmg-agent
 
 ### Phase 0 — 준비물 확인 (30분)
 - 파이4 4GB, **정품 USB-C 어댑터(5.1V / 3A = 15.3W)** — 전원 부실이 24시간 운영 사고 1위, Pro Endurance 64GB
-- LCD 패널 + micro-HDMI 케이블, 블루투스 스피커, 유선랜 또는 **5GHz Wi-Fi**
+- LCD 패널 + micro-HDMI 케이블, **유선 스피커(USB 또는 3.5mm)**, 유선랜 또는 Wi-Fi
 - 다른 PC에 **Raspberry Pi Imager** 설치
 - ✅ 통과: 위 항목이 모두 손에 있음
 
@@ -360,20 +360,23 @@ sudo -u pi DISPLAY=:99 /opt/tmg-alert/venv/bin/python -m tools.probe --config /e
 결과 HTML/스크린샷을 `/dev/shm/tmg-probe/` 에 저장.
 - ✅ 통과: 로그인 성공 로그, 배지 파싱에 `CS관리: 3` 류가 찍힘, 스크린샷에 관리자 화면이 보임
 
-### Phase 4 — 소리(블루투스 스피커) (30분)
+### Phase 4 — 소리 (유선 스피커) (30분)
+
+**유선(USB 또는 3.5mm)만 씁니다.** 블루투스를 쓰지 않는 이유는 11장 참고.
+
 ```bash
-bluetoothctl
-> power on
-> scan on          # 스피커를 페어링 모드로
-> pair  XX:XX:XX:XX:XX:XX
-> trust XX:XX:XX:XX:XX:XX      # ★ trust 필수 — 자동 재연결의 핵심
-> connect XX:XX:XX:XX:XX:XX
-> quit
-paplay /opt/tmg-alert/sounds/order.wav      # 소리 확인
+pactl list short sinks                        # 스피커가 목록에 보여야 함
+paplay /opt/tmg-alert/sounds/order.wav        # 소리 확인
+# HDMI 로 소리가 새면 기본 출력 장치를 바꾼다
+wpctl status
+wpctl set-default <ID>
+wpctl set-volume @DEFAULT_AUDIO_SINK@ 80%
 ```
-config의 `notify.bt_mac` 에 MAC을 넣으면 에이전트가 끊길 때마다 재연결하고, 2분마다 무음을 흘려
-스피커 절전을 막습니다.
-- ✅ 통과: 스피커에서 효과음이 나고, 스피커를 껐다 켜도 1분 내 자동 재연결
+config 의 `notify.sink_match`(예: `"usb"`)를 넣으면 그 문자열이 든 장치가 있을 때만 '스피커 정상'으로
+표시하고, `notify.play_cmd` 에 `--device=` 를 붙이면 출력 장치를 고정할 수 있습니다. 에이전트는
+20초마다 장치 생존을 확인하고, `notify.keepalive_sec`(기본 120초)마다 무음을 흘려 절전을 막습니다.
+- ✅ 통과: 스피커에서 효과음이 나고, 스피커를 껐다 켜도 1분 내 다시 소리가 남.
+  USB 스피커라면 소리를 낸 직후 `vcgencmd get_throttled` 가 `0x0` (전류 부족 없음)
 
 ### Phase 5 — LCD 알림판 (30분)
 ```bash
@@ -462,7 +465,8 @@ sudo nano /etc/tmg-alert/config.yaml && sudo systemctl restart tmg-agent
 ```
 
 문제 유형별 첫 확인
-- 소리만 안 남 → `bluetoothctl info <MAC>` 의 `Connected: yes`, `pactl list sinks short`
+- 소리만 안 남 → `pactl list short sinks` 에 스피커가 보이는지 → `paplay /opt/tmg-alert/sounds/order.wav`
+  → 출력이 HDMI 로 잡혔으면 `wpctl status` 로 ID 확인 후 `wpctl set-default <ID>`
 - 화면만 안 나옴 → `systemctl status tmg-kiosk`, HDMI 케이블(파이4는 **전원 옆 포트가 HDMI0**)
 - 알림이 아예 없음 → `journalctl`에서 `badges:` 로그가 주기적으로 찍히는지, 값이 갱신되는지
 - 로그인 반복 실패 → reCAPTCHA 챌린지 가능성. 파이에서 `--headed` 스크린샷(`/dev/shm/tmg-probe/`) 확인 후
@@ -477,9 +481,14 @@ sudo nano /etc/tmg-alert/config.yaml && sudo systemctl restart tmg-agent
   → apt의 `chromium` + `chromium-driver` + Selenium 조합이 파이에서 가장 안정적.
 - **헤드리스 모드**: 팝업·확장·일부 JS 타이밍이 달라진다. Xvfb 안에서 "진짜 창"으로 띄우는 편이
   향후 수집 매크로까지 고려하면 훨씬 덜 깨진다.
+- **블루투스 스피커**: 파이4는 2.4GHz Wi-Fi 와 BT 가 같은 칩이라 서로 간섭하고, 무엇보다 연결이 끊기면
+  **소리만 안 나고 시스템은 정상으로 보이는 조용한 실패**가 된다. 알림 시스템에서 가장 나쁜 실패 방식이라
+  유선(USB / 3.5mm)으로 간다. 절전 복귀 지연으로 알림음 앞부분이 잘리는 문제, BlueZ 업데이트마다 깨지는
+  A2DP 도 덤으로 사라진다.
 - **캡차 자동 해결**: 하지 않는다. 챌린지가 뜨면 사람을 부른다.
 - **DB/파일 로그 적재**: SD 쓰기를 늘리므로 안 한다. 필요해지면 NAS나 USB로 뺀다.
 
 ---
 
 *문서 작성: 2026-07-27 · 사이트 구조는 같은 날 브라우저로 직접 확인한 값 기준*
+*2026-07-28 개정: 스피커를 블루투스 → 유선(USB/3.5mm)으로 변경 (코드·설치 가이드 모두 반영됨)*
