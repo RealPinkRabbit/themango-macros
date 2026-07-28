@@ -111,7 +111,9 @@ class Scheduler:
         now = time.time()
         for i, t in enumerate(self.tasks):
             t.next_run = now + i * 2
-            t.fail_count = 0
+            t.fail_count = 0            # 밤 사이의 실패 이력은 아침에 리셋한다
+            t.first_fail_ts = 0.0
+            t.alerted = False
 
     # ------------------------------------------------------------------ 상태
     def status(self) -> dict:
@@ -159,16 +161,23 @@ class Scheduler:
         self.current_started = time.time()
         try:
             task.run(self.ctx)
+            if task.first_fail_ts:
+                log.info("태스크 %s 복구됨 (%.0f분 만에, %d회 실패 후)", task.name,
+                         (time.time() - task.first_fail_ts) / 60, task.fail_count, extra=KEEP)
             task.fail_count = 0
+            task.first_fail_ts = 0.0
+            task.alerted = False
             task.next_run = time.time() + task.interval_sec
         except Exception as e:
+            now = time.time()
             task.fail_count += 1
+            if not task.first_fail_ts:
+                task.first_fail_ts = now
             delay = min(BACKOFF_MAX, task.interval_sec * (2 ** min(task.fail_count, 5)))
-            task.next_run = time.time() + delay
+            task.next_run = now + delay
             log.error("태스크 %s 실패(%d회): %s — %d초 후 재시도",
                       task.name, task.fail_count, e, delay, exc_info=task.fail_count == 1)
-            if task.fail_count == 3:      # 한 번 삐끗한 정도로는 울리지 않는다
-                self.ctx.emit(ERROR, f"{task.name} 3회 연속 실패", str(e)[:300])
+            self._maybe_alert_failure(task, e, now)
         finally:
             self.current_task = None
             self.current_started = 0.0
@@ -177,6 +186,24 @@ class Scheduler:
                     self.ctx.browser.tick()
                 except Exception:
                     log.warning("브라우저 tick 실패", exc_info=True)
+
+    def _maybe_alert_failure(self, task, err, now: float):
+        """실패 알림은 '횟수' 가 아니라 '얼마나 오래 실패 중인가' 로 판단한다.
+
+        주문/CS 가져오기는 한두 번 놓쳐도 다음 주기에 따라잡으면 그만이라, 몇 분짜리
+        일시 장애로 소리를 내는 건 순수한 소음이다(2026-07-28 새벽에 실제로 두 번 울렸다).
+        반대로 아예 안 알리면 영구 정지를 눈치채지 못하는 '조용한 실패' 가 되므로,
+        사용자가 견딜 수 있는 시간(notify.error_after_min)을 넘겼을 때 **한 번만** 알린다.
+        """
+        after_min = float(self.cfg.get("notify.error_after_min", 60) or 0)
+        if after_min <= 0 or task.alerted:
+            return
+        down_sec = now - task.first_fail_ts
+        if down_sec < after_min * 60:
+            return
+        task.alerted = True
+        self.ctx.emit(ERROR, f"{task.name} {down_sec / 60:.0f}분째 실패",
+                      f"{task.fail_count}회 연속 · {str(err)[:200]}")
 
     def stop(self):
         self.stop_event.set()

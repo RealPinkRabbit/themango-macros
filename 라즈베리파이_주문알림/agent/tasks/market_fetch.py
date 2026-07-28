@@ -40,7 +40,7 @@ class MarketFetch(Task):
         try:
             b.ensure_login()
         except CaptchaChallenge as e:
-            ctx.emit(ERROR, "로그인 캡차 — 사람이 필요합니다", str(e))
+            ctx.emit_once("captcha", ERROR, "로그인 캡차 — 사람이 필요합니다", str(e))
             raise
 
         # 로그인 직후 쿠키를 HTTP 세션에 넘겨 둔다(배지 폴링용)

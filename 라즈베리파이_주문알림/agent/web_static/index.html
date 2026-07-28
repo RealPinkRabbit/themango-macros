@@ -42,6 +42,7 @@
   #bar .sp { margin-left:auto; }
   .dot { display:inline-block; width:.9vw; height:.9vw; border-radius:50%; margin-right:.5vw; vertical-align:middle; }
   .dot.ok { background:var(--ok); } .dot.warn { background:var(--warn); } .dot.bad { background:var(--bad); }
+  .dot.off { background:var(--dim); }
   #recent { position:absolute; right:2vw; top:2vh; width:26vw; max-height:40vh; overflow:hidden;
             font-size:1.3vw; color:var(--dim); text-align:right; line-height:1.6; }
   body.alert #recent { display:none; }
@@ -67,6 +68,7 @@
     <span><span class="dot" id="dotConn"></span>서버</span>
     <span><span class="dot" id="dotLogin"></span>로그인</span>
     <span><span class="dot" id="dotSpk"></span>스피커</span>
+    <span><span class="dot" id="dotChk"></span><span id="checkInfo">확인 -</span></span>
     <span id="badgeInfo"></span>
     <span class="sp" id="fetchInfo"></span>
     <span id="nextInfo"></span>
@@ -102,6 +104,16 @@
     dot("dotConn", connected ? "ok" : "bad");
     dot("dotLogin", status.logged_in ? "ok" : "warn");
     dot("dotSpk", status.speaker_ok === true ? "ok" : (status.speaker_ok === false ? "bad" : "warn"));
+
+    // 실패 알림은 몇 시간 뒤에야 울리므로, 대신 여기서 조용히 보여준다.
+    // "마지막 확인이 언제인지"만 보면 시스템이 살아있는지 곁눈질로 알 수 있다.
+    if (status.night) {
+      dot("dotChk", "off"); el("checkInfo").textContent = "야간 정지";
+    } else {
+      var age = status.last_badge_check ? (Date.now() / 1000 - status.last_badge_check) : 1e9;
+      dot("dotChk", age < 300 ? "ok" : (age < 1800 ? "warn" : "bad"));
+      el("checkInfo").textContent = "확인 " + ago(status.last_badge_check);
+    }
 
     var b = status.badges || {}, parts = [];
     Object.keys(b).forEach(function (k) { if (b[k] > 0) parts.push(k + " " + b[k]); });

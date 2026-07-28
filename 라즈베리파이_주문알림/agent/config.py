@@ -41,6 +41,7 @@ DEFAULTS = {
     "notify.repeat_until_ack": True,
     "notify.repeat_interval_sec": 30,
     "notify.quiet_hours": [],
+    "notify.error_after_min": 60,
     "notify.sink_match": "",
     "notify.keepalive_sec": 120,
     "notify.extra_cmd": "",

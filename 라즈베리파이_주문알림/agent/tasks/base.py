@@ -24,6 +24,23 @@ class Ctx:
     def emit(self, kind: str, title: str, body: str = "", count: int = 0):
         self.bus.publish(Event(kind, title, body, count))
 
+    def emit_once(self, key: str, kind: str, title: str, body: str = "", count: int = 0):
+        """같은 상황이 이어지는 동안 딱 한 번만 알린다.
+
+        캡차처럼 '재시도해도 계속 같은 결과' 인 상황을 태스크가 돌 때마다 알리면
+        몇 분 간격으로 계속 울리게 된다. clear_once(key) 로 상황이 풀렸음을 알린다.
+        """
+        k = f"once_{key}"
+        if self.state.get(k):
+            return False
+        self.state.set(k, True)
+        self.emit(kind, title, body, count)
+        return True
+
+    def clear_once(self, key: str):
+        if self.state.get(f"once_{key}"):
+            self.state.set(f"once_{key}", False)
+
 
 class Task:
     name = "task"
@@ -34,6 +51,10 @@ class Task:
         self.interval_sec = int(interval_sec)
         self.next_run = 0.0
         self.fail_count = 0
+        #: 연속 실패가 시작된 시각(0 = 정상). 알림은 횟수가 아니라 '얼마나 오래' 로 판단한다.
+        self.first_fail_ts = 0.0
+        #: 이번 장애에 대해 이미 알렸는가 (한 번만 울리게)
+        self.alerted = False
 
     def run(self, ctx: Ctx):
         raise NotImplementedError

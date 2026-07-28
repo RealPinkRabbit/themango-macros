@@ -54,7 +54,9 @@ class BadgeWatch(Task):
             try:
                 ctx.browser.ensure_login(force=True)
             except CaptchaChallenge as e:
-                ctx.emit(ERROR, "로그인 캡차 — 사람이 필요합니다", str(e))
+                # 캡차는 기다려도 안 풀리는 "사람 호출" 상황이라 시간 임계값을 적용하지 않고
+                # 즉시 알린다. 다만 재시도마다 울리지 않게 장애 1회당 한 번만.
+                ctx.emit_once("captcha", ERROR, "로그인 캡차 — 사람이 필요합니다", str(e))
                 raise
             ctx.http.sync_from_browser(ctx.browser)
             badges = ctx.http.badges()
@@ -64,6 +66,7 @@ class BadgeWatch(Task):
             ctx.log.warning("배지를 하나도 못 읽었습니다(응답 이상 또는 구조 변경) — 기준선 유지")
             return
 
+        ctx.clear_once("captcha")       # 여기까지 왔으면 로그인은 정상
         ctx.state.set("badges", badges)                 # 표시용 최신값
         ctx.state.set("last_badge_check", time.time())
 
