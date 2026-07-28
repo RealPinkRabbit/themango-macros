@@ -17,6 +17,8 @@ DEFAULTS = {
     "schedule.badge_watch_sec": 60,
     "schedule.order_list_sec": 0,
     "schedule.example_collect_sec": 0,
+    "schedule.night_stop": "22:00-08:00",
+    "schedule.badge_drop_confirm": 2,
     "browser.binary": "",
     "browser.driver": "",
     "browser.display": ":99",

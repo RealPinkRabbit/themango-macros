@@ -9,7 +9,6 @@
 from __future__ import annotations
 
 import contextlib
-import datetime as dt
 import logging
 import os
 import shlex
@@ -20,6 +19,7 @@ import time
 import wave
 
 from .events import ALERT_KINDS, ERROR, NEW_CS, NEW_ORDER, Event
+from .timewin import in_window
 
 log = logging.getLogger("notify")
 
@@ -37,26 +37,6 @@ def _make_silence(path: str = SILENCE_WAV, seconds: float = 0.6):
         frames = b"".join(struct.pack("<h", (1 if i % 2 else -1)) for i in range(int(44100 * seconds)))
         w.writeframes(frames)
     return path
-
-
-def _in_quiet_hours(ranges) -> bool:
-    if not ranges:
-        return False
-    now = dt.datetime.now().time()
-    for r in ranges:
-        try:
-            a, b = str(r).split("-")
-            start = dt.time(*map(int, a.strip().split(":")))
-            end = dt.time(*map(int, b.strip().split(":")))
-        except Exception:
-            continue
-        if start <= end:
-            if start <= now < end:
-                return True
-        else:                       # 자정을 넘는 구간
-            if now >= start or now < end:
-                return True
-    return False
 
 
 class Notifier:
@@ -105,7 +85,7 @@ class Notifier:
             log.warning("소리 재생 실패(%s): %s", path, e)
 
     def _play_for(self, ev: Event):
-        if _in_quiet_hours(self.cfg.get("notify.quiet_hours")):
+        if in_window(self.cfg.get("notify.quiet_hours")):
             log.info("조용한 시간대 — 소리 생략 (화면 알림만)")
             return
         path = self._sound_path(ev.kind)

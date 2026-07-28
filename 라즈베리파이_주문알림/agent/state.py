@@ -84,11 +84,18 @@ class State:
         except Exception:
             log.warning("RAM 상태 기록 실패", exc_info=True)
 
-    def maybe_flush(self, force: bool = False):
-        """스케줄러 루프에서 주기적으로 호출. 조건을 만족할 때만 SD에 쓴다."""
+    def maybe_flush(self, force: bool = False, min_gap: float = 0):
+        """스케줄러 루프에서 주기적으로 호출. 조건을 만족할 때만 SD에 쓴다.
+
+        force=True 는 간격을 무시하고 즉시 기록한다(종료·야간 진입처럼 드문 시점용).
+        min_gap 을 함께 주면 그 간격 안에서는 강제 기록을 건너뛴다 — '배지 기준선처럼
+        잃으면 안 되지만 하루에도 여러 번 바뀌는 값' 을 SD를 아끼며 남길 때 쓴다.
+        """
         with self._lock:
             if not self.disk_path or not self._dirty_disk:
                 return
+            if force and min_gap and time.time() - self._last_disk_flush < min_gap:
+                force = False
             if not force:
                 if self.flush_min_interval <= 0:
                     return  # 0 이면 종료 시에만 저장

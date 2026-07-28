@@ -112,8 +112,10 @@
     ((status.scheduler || {}).tasks || []).forEach(function (t) {
       if (t.name === "market_fetch") next = t.next_in_sec;
     });
-    el("nextInfo").textContent = next === null ? "" : "다음 " + Math.ceil(next / 60) + "분";
-    el("idleNote").textContent = parts.length ? ("미처리 " + parts.join(" · ")) : "";
+    el("nextInfo").textContent = status.night ? "야간 정지" :
+      (next === null ? "" : "다음 " + Math.ceil(next / 60) + "분");
+    el("idleNote").textContent = status.night ? "야간 정지 중 — 알림을 쉽니다"
+      : (parts.length ? ("미처리 " + parts.join(" · ")) : "");
 
     if (status.alert) { showAlert(status.alert); } else { clearAlert(); }
   }

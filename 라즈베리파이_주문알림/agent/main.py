@@ -22,6 +22,7 @@ from .scheduler import Scheduler, sd_notify
 from .session import HttpSession
 from .state import State
 from .tasks.base import Ctx
+from .timewin import in_window
 from .web import WebServer
 
 log = logging.getLogger("main")
@@ -68,6 +69,7 @@ def main(argv=None):
             "last_fetch_ts": s.get("last_fetch_ts"),
             "last_fetch_summary": s.get("last_fetch_summary", ""),
             "speaker_ok": s.get("speaker_ok"),
+            "night": bool(st.get("night")),
             "logged_in": bool(http.has_cookies),
             "alert": active.to_dict() if active else None,
             "scheduler": st,
@@ -80,16 +82,20 @@ def main(argv=None):
     # (첫 로그인이 오래 걸려도 TimeoutStartSec 에 걸리지 않게)
     sd_notify("READY=1")
 
-    # 최초 로그인 — 실패해도 죽지 않고 태스크 백오프에 맡긴다
-    try:
-        browser.ensure_login()
-        http.sync_from_browser(browser)
-    except CaptchaChallenge as e:
-        log.error("캡차 챌린지: %s", e)
-        ctx.emit(ERROR, "로그인 캡차 — 사람이 필요합니다", str(e))
-    except Exception as e:
-        log.error("초기 로그인 실패: %s", e)
-        ctx.emit(ERROR, "초기 로그인 실패", str(e)[:300])
+    # 최초 로그인 — 실패해도 죽지 않고 태스크 백오프에 맡긴다.
+    # 단, 야간 정지 시간대에 켜졌다면 브라우저를 아예 띄우지 않는다(아침에 스케줄러가 로그인한다).
+    if in_window(cfg.get("schedule.night_stop", "")):
+        log.info("야간 정지 시간대 — 초기 로그인을 생략합니다")
+    else:
+        try:
+            browser.ensure_login()
+            http.sync_from_browser(browser)
+        except CaptchaChallenge as e:
+            log.error("캡차 챌린지: %s", e)
+            ctx.emit(ERROR, "로그인 캡차 — 사람이 필요합니다", str(e))
+        except Exception as e:
+            log.error("초기 로그인 실패: %s", e)
+            ctx.emit(ERROR, "초기 로그인 실패", str(e)[:300])
 
     def shutdown(signum, _frame):
         log.info("종료 신호(%s) 수신", signum)
