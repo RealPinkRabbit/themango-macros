@@ -1,7 +1,8 @@
 """스케줄러 + systemd 워치독 + 야간 정지.
 
 - 태스크는 한 번에 하나만 실행한다(Selenium 세션을 공유하므로 동시 실행 금지).
-- 실패하면 지수 백오프(최대 10분). 연속 3회 실패하면 화면·소리로 알린다.
+- 실패하면 지수 백오프(태스크별 상한: 기본 10분, badge_watch 처럼 가벼운 폴링은 2분).
+  알림은 '횟수' 가 아니라 '얼마나 오래 실패 중인가'(notify.error_after_min)로 판단한다.
 - systemd Type=notify + WatchdogSec 과 연동:
   별도 스레드가 주기적으로 WATCHDOG=1 을 보내되, 태스크가 max_task_sec 를 넘겨
   '진짜로 멈춘' 상태면 핑을 멈춰 systemd 가 프로세스를 재시작하게 한다.
@@ -125,7 +126,8 @@ class Scheduler:
                 {"name": t.name,
                  "interval_sec": t.interval_sec,
                  "next_in_sec": max(0, int(t.next_run - time.time())),
-                 "fail_count": t.fail_count}
+                 "fail_count": t.fail_count,
+                 "last_error": t.last_error}
                 for t in self.tasks
             ],
         }
@@ -167,13 +169,16 @@ class Scheduler:
             task.fail_count = 0
             task.first_fail_ts = 0.0
             task.alerted = False
+            task.last_error = ""
             task.next_run = time.time() + task.interval_sec
         except Exception as e:
             now = time.time()
             task.fail_count += 1
             if not task.first_fail_ts:
                 task.first_fail_ts = now
-            delay = min(BACKOFF_MAX, task.interval_sec * (2 ** min(task.fail_count, 5)))
+            task.last_error = str(e)[:200]
+            cap = min(BACKOFF_MAX, int(getattr(task, "max_backoff_sec", BACKOFF_MAX)))
+            delay = min(cap, task.interval_sec * (2 ** min(task.fail_count, 5)))
             task.next_run = now + delay
             log.error("태스크 %s 실패(%d회): %s — %d초 후 재시도",
                       task.name, task.fail_count, e, delay, exc_info=task.fail_count == 1)

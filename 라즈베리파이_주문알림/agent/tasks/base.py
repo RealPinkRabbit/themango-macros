@@ -46,6 +46,8 @@ class Task:
     name = "task"
     #: 이 태스크가 브라우저를 쓰는가 (쓰면 실행 후 브라우저 tick)
     uses_browser = False
+    #: 실패 시 물러날 수 있는 최대 간격. 무거운 태스크는 길게, 가벼운 폴링은 짧게 잡는다.
+    max_backoff_sec = 600
 
     def __init__(self, interval_sec: int):
         self.interval_sec = int(interval_sec)
@@ -55,6 +57,8 @@ class Task:
         self.first_fail_ts = 0.0
         #: 이번 장애에 대해 이미 알렸는가 (한 번만 울리게)
         self.alerted = False
+        #: 마지막 실패 사유(화면에 짧게 보여주기 위함). 성공하면 지운다.
+        self.last_error = ""
 
     def run(self, ctx: Ctx):
         raise NotImplementedError

@@ -99,20 +99,30 @@
       ((d.getMinutes() % 4) - 2) + "px)";
   }
 
+  function task(name) {
+    var found = null;
+    ((status.scheduler || {}).tasks || []).forEach(function (t) { if (t.name === name) found = t; });
+    return found;
+  }
+
   function render() {
     if (!status) return;
     dot("dotConn", connected ? "ok" : "bad");
     dot("dotLogin", status.logged_in ? "ok" : "warn");
     dot("dotSpk", status.speaker_ok === true ? "ok" : (status.speaker_ok === false ? "bad" : "warn"));
 
-    // 실패 알림은 몇 시간 뒤에야 울리므로, 대신 여기서 조용히 보여준다.
-    // "마지막 확인이 언제인지"만 보면 시스템이 살아있는지 곁눈질로 알 수 있다.
+    // 실패 알림은 한 시간 뒤에야 울리므로, 대신 여기서 조용히 보여준다.
+    // ★ "언제 확인했는지"만 보여주면 왜 멈췄는지를 알 수 없다 — 실제로 badge_watch 가
+    //   8회 연속 실패하는 동안 화면에는 '확인 55분 전' 한 줄뿐이었다. 실패 중이면 그렇다고 쓴다.
+    var bw = task("badge_watch");
     if (status.night) {
       dot("dotChk", "off"); el("checkInfo").textContent = "야간 정지";
     } else {
       var age = status.last_badge_check ? (Date.now() / 1000 - status.last_badge_check) : 1e9;
-      dot("dotChk", age < 300 ? "ok" : (age < 1800 ? "warn" : "bad"));
-      el("checkInfo").textContent = "확인 " + ago(status.last_badge_check);
+      var failing = bw && bw.fail_count > 0;
+      dot("dotChk", failing || age >= 1800 ? "bad" : (age < 300 ? "ok" : "warn"));
+      el("checkInfo").textContent = "확인 " + ago(status.last_badge_check) +
+        (failing ? " · 읽기 실패 " + bw.fail_count + "회" : "");
     }
 
     var b = status.badges || {}, parts = [];
@@ -120,12 +130,9 @@
     el("badgeInfo").textContent = parts.length ? "미처리: " + parts.join(" · ") : "미처리 없음";
     el("fetchInfo").textContent = "마지막 가져오기 " + ago(status.last_fetch_ts);
 
-    var next = null;
-    ((status.scheduler || {}).tasks || []).forEach(function (t) {
-      if (t.name === "market_fetch") next = t.next_in_sec;
-    });
+    var mf = task("market_fetch");
     el("nextInfo").textContent = status.night ? "야간 정지" :
-      (next === null ? "" : "다음 " + Math.ceil(next / 60) + "분");
+      (!mf ? "" : "다음 " + Math.ceil(mf.next_in_sec / 60) + "분");
     el("idleNote").textContent = status.night ? "야간 정지 중 — 알림을 쉽니다"
       : (parts.length ? ("미처리 " + parts.join(" · ")) : "");
 

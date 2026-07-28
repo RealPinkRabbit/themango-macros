@@ -45,6 +45,11 @@ def kind_for(label: str) -> str:
 
 class BadgeWatch(Task):
     name = "badge_watch"
+    # ★ 이 태스크는 GET 한 번짜리 경량 폴링이면서 **알림 판정을 담당하는 유일한 태스크**다.
+    #   실패했다고 10분씩 눈을 감으면 그 사이 들어온 주문을 통째로 놓친다. 부하가 거의 없으니
+    #   짧게만 물러나고 자주 두드린다. (2026-07-28: Wi-Fi 흔들림에 8회 연속 실패하며
+    #   백오프가 600초로 포화돼, 60초 폴링이 10분 폴링으로 전락한 적이 있다)
+    max_backoff_sec = 120
 
     def run(self, ctx):
         try:

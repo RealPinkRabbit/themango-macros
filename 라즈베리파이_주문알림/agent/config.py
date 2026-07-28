@@ -11,6 +11,8 @@ DEFAULTS = {
     "site.login_path": "/admin/admin_login.php",
     "site.login_marker": "login_pass",
     "site.poll_path": "/admin/admin_getorder.php",
+    # 배지 폴링 타임아웃. 재시도 2회를 더해도 폴링 간격(60초) 안에 끝나야 한다.
+    "site.poll_timeout_sec": 15,
     "site.login_id": "",
     "site.login_pw": "",
     "schedule.market_fetch_min": 5,
