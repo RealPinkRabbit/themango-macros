@@ -13,8 +13,10 @@ import signal
 import sys
 import time
 
+from . import auditlog
 from . import config as config_mod
 from . import tasks as task_mod
+from .auditlog import KEEP
 from .browser import Browser, CaptchaChallenge
 from .events import ERROR, EventBus
 from .notify import Notifier
@@ -46,7 +48,10 @@ def main(argv=None):
 
     cfg = config_mod.load(args.config)
     setup_logging(cfg.get("log.level", "INFO"))
-    log.info("=== tmg-alert 시작 ===")
+    # 저널은 RAM 이라 재부팅하면 사라진다 → 사건만 SD에 따로 남긴다(auditlog 설명 참고).
+    auditlog.install(cfg.get("log.keep_path"), cfg.get("log.keep_max_kb"),
+                     cfg.get("log.keep_backups"))
+    log.info("=== tmg-alert 시작 ===", extra=KEEP)
 
     state = State(cfg.get("state.ram_path"), cfg.get("state.disk_path"),
                   cfg.get("state.flush_min_interval_sec"))
@@ -85,7 +90,7 @@ def main(argv=None):
     # 최초 로그인 — 실패해도 죽지 않고 태스크 백오프에 맡긴다.
     # 단, 야간 정지 시간대에 켜졌다면 브라우저를 아예 띄우지 않는다(아침에 스케줄러가 로그인한다).
     if in_window(cfg.get("schedule.night_stop", "")):
-        log.info("야간 정지 시간대 — 초기 로그인을 생략합니다")
+        log.info("야간 정지 시간대 — 초기 로그인을 생략합니다", extra=KEEP)
     else:
         try:
             browser.ensure_login()
@@ -112,7 +117,7 @@ def main(argv=None):
         web.stop()
         browser.quit()
         state.maybe_flush(force=True)       # 종료 시 1회만 SD 기록
-        log.info("=== tmg-alert 종료 ===")
+        log.info("=== tmg-alert 종료 ===", extra=KEEP)
     return 0
 
 

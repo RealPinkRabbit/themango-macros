@@ -52,6 +52,10 @@ DEFAULTS = {
     "order_list.url": "",
     "order_list.row_regex": "",
     "log.level": "INFO",
+    # 재부팅해도 남는 사건 기록 (WARNING 이상 + 표시된 주요 INFO). 비우면 끔.
+    "log.keep_path": "/var/lib/tmg-alert/events.log",
+    "log.keep_max_kb": 256,
+    "log.keep_backups": 3,
 }
 
 _MISSING = object()

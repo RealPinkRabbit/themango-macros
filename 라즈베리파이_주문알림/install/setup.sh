@@ -298,10 +298,15 @@ EOF
 
 cat > /etc/systemd/system/tmg-reboot.timer <<'EOF'
 [Unit]
-Description=TMG 주간 예방 재부팅 (일요일 04:30)
+Description=TMG 주간 예방 재부팅 (일요일 21:45)
 
+# ★ 야간 정지 창(기본 22:00~08:00) '직전' 으로 잡는다.
+#   저널은 RAM 이라 재부팅하면 로그가 날아가는데, 야간은 알림이 없는 감시 사각지대다.
+#   창 한복판(예전 04:30)에서 재부팅하면 밤사이 기록이 아침 전에 사라진다.
+#   직전에 재부팅하면 깨끗한 상태로 밤에 들어가고, 밤 기록은 아침까지 온전히 남는다.
+#   night_stop 을 바꿨다면 이 시각도 함께 옮길 것.
 [Timer]
-OnCalendar=Sun *-*-* 04:30:00
+OnCalendar=Sun *-*-* 21:45:00
 Persistent=false
 
 [Install]

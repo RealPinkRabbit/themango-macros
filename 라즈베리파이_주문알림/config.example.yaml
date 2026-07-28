@@ -86,3 +86,13 @@ order_list:                  # README 8장 2순위. 배지로 주문 감지가 �
 
 log:
   level: "INFO"              # DEBUG / INFO / WARNING
+
+  # ★ 재부팅해도 남는 '사건 기록'.
+  # 저널(journalctl)은 SD 수명을 위해 RAM 에만 두므로 재부팅하면 통째로 사라진다.
+  # 게다가 야간 정지 시간대는 알림이 없는 감시 사각지대라, 아침에 볼 게 로그밖에 없다.
+  # 그래서 WARNING 이상 + 주요 사건(알림 발생/확인, 배지 기준선 변화, 야간 전환, 기동/종료)만
+  # 이 파일에 남긴다. 하루 수십 줄(수 KB) 수준이라 SD 부담은 사실상 없다.
+  #   보기: tail -f /var/lib/tmg-alert/events.log
+  keep_path: "/var/lib/tmg-alert/events.log"   # 비우면 끔
+  keep_max_kb: 256           # 파일 하나 크기 상한
+  keep_backups: 3            # 회전 보관 개수 (합쳐서 최대 1MB)

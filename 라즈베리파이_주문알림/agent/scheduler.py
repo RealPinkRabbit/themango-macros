@@ -18,6 +18,7 @@ import socket
 import threading
 import time
 
+from .auditlog import KEEP
 from .events import ERROR
 from .timewin import in_window
 
@@ -81,7 +82,7 @@ class Scheduler:
 
     def _enter_night(self):
         self.night = True
-        log.info("야간 정지 시작 — 태스크를 멈추고 브라우저를 닫습니다")
+        log.info("야간 정지 시작 — 태스크를 멈추고 브라우저를 닫습니다", extra=KEEP)
         st = self.ctx.state
         st.set("night", True)
         st.set("night_since", time.time())
@@ -99,7 +100,7 @@ class Scheduler:
 
     def _exit_night(self):
         self.night = False
-        log.info("야간 정지 해제 — 재개합니다")
+        log.info("야간 정지 해제 — 재개합니다", extra=KEEP)
         self.ctx.state.set("night", False)
         try:
             # 밤새 세션이 만료됐을 것이므로 먼저 로그인해 둔다. 실패해도 태스크가 알아서 재시도한다.

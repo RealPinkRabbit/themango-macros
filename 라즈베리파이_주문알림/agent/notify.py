@@ -18,6 +18,7 @@ import threading
 import time
 import wave
 
+from .auditlog import KEEP
 from .events import ALERT_KINDS, ERROR, NEW_CS, NEW_ORDER, Event
 from .timewin import in_window
 
@@ -54,6 +55,7 @@ class Notifier:
     def on_event(self, ev: Event):
         if ev.kind not in ALERT_KINDS:
             return
+        log.info("알림 발생: [%s] %s — %s", ev.kind, ev.title, ev.body, extra=KEEP)
         with self._lock:
             self.active = ev
         self._play_for(ev)
@@ -63,7 +65,7 @@ class Notifier:
             was = self.active
             self.active = None
         if was:
-            log.info("알림 확인됨: %s", was.title)
+            log.info("알림 확인됨: %s", was.title, extra=KEEP)
         return bool(was)
 
     # ------------------------------------------------------------------ 재생

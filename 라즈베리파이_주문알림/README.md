@@ -199,6 +199,39 @@ LCD에는 알림판만 남는다. 그러면서도 **완전 헤드리스가 아�
 > 교훈: **"잔량" 지표로 "증분" 을 판정할 때는, 지표를 못 읽은 경우와 0으로 읽은 경우를 반드시 구분할 것.**
 > 둘을 같게 다루면 관측 실패가 그대로 가짜 이벤트가 된다.
 
+### 3-3. ★ 야간의 사각지대와 사건 기록 (`log.keep_path`)
+
+야간 정지에는 딸린 위험이 하나 있다. **밤이 소리도 화면도 없는 감시 사각지대가 된다.**
+그 시간의 유일한 목격자는 로그인데, 이 시스템은 SD 수명을 위해 저널을 RAM 에만 둔다
+(`Storage=volatile`, `/var/log` 도 tmpfs). 즉 **재부팅하면 이전 부팅의 로그가 통째로 사라진다.**
+`journalctl -b -1`(직전 부팅) 도 쓸 수 없다.
+
+정리하면 — **동작 자체는 안전하다.** 야간 진입 시 배지 기준선을 SD에 강제 저장하므로 밤중에
+재부팅이 나도 아침 판정은 정상이다. 잃는 것은 **"왜 그랬는지"** 다. 이번 오탐도 마침 재부팅 전이라
+원인을 확정할 수 있었을 뿐이다. 그래서 두 가지를 걸었다.
+
+**(1) 사건만 SD에 남긴다** — `agent/auditlog.py`
+
+| 남기는 것 | 남기지 않는 것 |
+|---|---|
+| WARNING 이상 전부 (네트워크 실패·로그인 실패·구조 변경) | 평범한 진행 로그 |
+| 알림 발생 / 확인, 배지 기준선 변화, 야간 전환, 기동·종료 (`extra=KEEP` 로 표시한 줄) | 태스크 주기 실행, 폴링 결과 등 |
+
+```bash
+tail -f /var/lib/tmg-alert/events.log     # 재부팅해도 남아 있다
+```
+
+하루 수십 줄(수 KB)이라 SD 부담은 사실상 없고, 크기 상한(기본 256KB×3=최대 1MB)이 걸려 있어
+네트워크가 계속 말썽이어도 폭주하지 않는다. `log.keep_path` 를 비우면 끈다.
+
+> 새 코드에서 "재부팅 뒤에도 봐야 할 줄" 은 `log.info("...", extra=KEEP)` 로 표시하면 된다.
+> 메시지 내용을 패턴으로 걸러내는 방식은 문구가 바뀌면 조용히 깨지므로 쓰지 않았다.
+
+**(2) 주간 예방 재부팅을 야간 창 밖으로** — 기존 일요일 04:30 은 야간 창 **한복판**이라
+매주 밤사이 기록이 아침 전에 사라졌다. **일요일 21:45(야간 진입 직전)** 로 옮겼다.
+깨끗한 상태로 밤에 들어가고, 밤 기록은 아침까지 온전히 남는다.
+`night_stop` 을 바꾸면 `tmg-reboot.timer` 의 `OnCalendar` 도 함께 옮길 것.
+
 ---
 
 ## 4. SD카드 쓰기 최소화 설계
@@ -212,7 +245,7 @@ Pro Endurance는 연속 쓰기에 강한 카드지만, 24시간 운영에서 카
 | 1 | 스왑 | `dphys-swapfile` 완전 비활성 (RAM 4GB면 불필요). 스왑은 SD 쓰기의 최대 주범 | `setup.sh` |
 | 2 | systemd 저널 | `Storage=volatile`, `RuntimeMaxUse=32M` → 로그를 RAM에만 | `/etc/systemd/journald.conf.d/` |
 | 3 | `/var/log` `/tmp` `/var/tmp` | tmpfs 마운트 (noatime, nosuid, 크기 제한) | `/etc/fstab` |
-| 4 | 애플리케이션 로그 | 파일 로그 없음. stdout → journald(=RAM). 최근 500건은 대시보드 메모리 링버퍼 | `agent/` |
+| 4 | 애플리케이션 로그 | 일반 로그는 파일로 안 쓴다. stdout → journald(=RAM). 최근 500건은 대시보드 메모리 링버퍼. **예외로 '사건'(WARNING 이상 + 주요 INFO)만** `/var/lib/tmg-alert/events.log` 에 회전 기록 — 재부팅하면 저널이 사라져 야간 사고를 진단할 수 없기 때문(3-3장). 하루 수십 줄, 상한 1MB | `agent/auditlog.py` |
 | 5 | Chromium 프로필·캐시 | 자동화·키오스크 모두 `--user-data-dir=/dev/shm/...`, `--disk-cache-dir=/dev/shm/...`, 캐시 32MB 상한 | `agent/browser.py`, 키오스크 유닛 |
 | 6 | 상태 파일 | 상시 저장은 `/run/tmg-alert/state.json`(tmpfs). SD(`/var/lib/...`)에는 **값이 바뀌었고 + 마지막 저장 후 1시간 경과**일 때만, 종료 시 1회. `os.replace`로 원자적 교체. 예외로 **배지 기준선**은 잃으면 곧 오탐이라 바뀔 때 즉시 기록하되 최소 5분 간격, **야간 진입 시** 1회 (합쳐도 하루 수십 회, 수백 바이트) | `agent/state.py` |
 | 7 | 수집 산출물 | 향후 이미지/텍스트 수집물은 `/dev/shm` 또는 USB/NAS로. SD에 쓰지 않음 | `agent/browser.py` 다운로드 경로 |
@@ -247,7 +280,8 @@ awk '{print $3, $10*512/1024/1024" MB written"}' /proc/diskstats | grep -E 'mmcb
 | **스피커가 절전으로 잠듦** | **2분마다 무음 킵얼라이브 재생**(`notify.keepalive_sec`) — 액티브 스피커도 무신호가 이어지면 잠드는 제품이 있다 |
 | **스피커가 빠지거나 인식이 풀림** | 20초마다 `pactl list short sinks` 로 출력 장치 생존 확인 → 사라지면 상태 `speaker_ok=false`, 알림판 표시등 빨강. 유선이라 "소리만 안 나는 조용한 실패"를 눈으로 잡아낼 수 있다 |
 | 정전 후 파일시스템 손상 | 위 4장 조치로 쓰기 자체가 거의 없어 손상 확률이 크게 낮아짐. + 11번(읽기전용) 적용 시 사실상 면역 |
-| 원인 모를 누적 열화 | 주 1회 새벽 예방 재부팅 타이머(기본 일요일 04:30, 끌 수 있음) |
+| 원인 모를 누적 열화 | 주 1회 예방 재부팅 타이머(**일요일 21:45 = 야간 진입 직전**, 끌 수 있음). 야간 창 안에서 재부팅하면 밤사이 로그가 아침 전에 사라져 이 시각을 골랐다. 3-3장 |
+| **재부팅으로 진단 근거가 사라짐** | 저널은 RAM 이라 부팅과 함께 소멸 → 사건만 SD에 회전 기록(`log.keep_path`). 3-3장 |
 | 화면 꺼짐/번인 | `xset s off -dpms`로 절전 해제, 대기 화면은 어둡게 + 요소 위치를 분 단위로 미세 이동 |
 | **밤에 알림이 떠서 잠을 깸** | 야간 정지(`schedule.night_stop`, 기본 22:00~08:00) — 태스크·브라우저를 아예 멈춰 소리도 화면도 나지 않는다. 3-1장 |
 | **관측 실패가 가짜 알림이 됨** | 배지를 못 읽으면 기준선을 건드리지 않고, 감소는 연속 확인 후에만 반영. 3-2장 |
@@ -502,8 +536,10 @@ sudo systemctl enable --now tmg-kiosk
 
 ```bash
 systemctl status tmg-agent tmg-xvfb tmg-wm tmg-kiosk   # 상태
-journalctl -u tmg-agent -f                  # 실시간 로그(RAM)
+journalctl -u tmg-agent -f                  # 실시간 로그(RAM, ★재부팅하면 사라짐)
 journalctl -u tmg-agent --since -1h | grep -i error
+tail -f /var/lib/tmg-alert/events.log       # 사건 기록(SD, 재부팅해도 남음) — 3-3장
+grep -E "야간|배지|알림" /var/lib/tmg-alert/events.log | tail -40   # 밤사이 무슨 일이 있었나
 sudo systemctl restart tmg-agent            # 에이전트만 재시작
 curl -X POST 127.0.0.1:8080/api/test        # 테스트 알림
 curl -s 127.0.0.1:8080/api/state | python3 -m json.tool   # 현재 상태 JSON
@@ -511,6 +547,9 @@ sudo nano /etc/tmg-alert/config.yaml && sudo systemctl restart tmg-agent
 ```
 
 문제 유형별 첫 확인
+- **밤사이 무슨 일이 있었나** → `journalctl` 이 아니라 **`/var/lib/tmg-alert/events.log`** 를 볼 것.
+  저널은 재부팅과 함께 사라지고, 야간은 알림이 없어 눈으로도 못 봤기 때문이다
+  (유닛 이름은 `tmg-agent` — `journalctl -u tmg-alert` 는 조용히 빈 결과를 낸다)
 - 소리만 안 남 → `pactl list short sinks` 에 스피커가 보이는지 → `paplay /opt/tmg-alert/sounds/order.wav`
   → 출력이 HDMI 로 잡혔으면 `wpctl status` 로 ID 확인 후 `wpctl set-default <ID>`
 - 화면만 안 나옴 → `systemctl status tmg-kiosk`, HDMI 케이블(파이4는 **전원 옆 포트가 HDMI0**)

@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import time
 
+from ..auditlog import KEEP
 from ..browser import CaptchaChallenge, LoginRequired
 from ..events import ERROR, NEW_CS, NEW_ORDER
 from .base import Task
@@ -72,11 +73,11 @@ class BadgeWatch(Task):
             ctx.state.set("badge_base", badges)
             ctx.state.set("badge_drop", {})
             ctx.state.maybe_flush(force=True, min_gap=60)
-            ctx.log.info("배지 기준선 설정: %s", badges)
+            ctx.log.info("배지 기준선 설정: %s", badges, extra=KEEP)
             return
 
         if badges != base:
-            ctx.log.info("배지 변화: %s → %s", base, badges)
+            ctx.log.info("배지 변화: %s → %s", base, badges, extra=KEEP)
 
         # 야간 정지 뒤 첫 판정이면 밤사이 쌓인 분량이므로 문구를 달리한다.
         overnight = bool(ctx.state.get("night_resume_pending"))
@@ -100,7 +101,7 @@ class BadgeWatch(Task):
                 if seen[1] >= confirm_n:
                     new_base[label] = count
                     drop.pop(label, None)
-                    ctx.log.info("배지 감소 확정: %s %d → %d", label, before, count)
+                    ctx.log.info("배지 감소 확정: %s %d → %d", label, before, count, extra=KEEP)
                 else:
                     drop[label] = seen
                     ctx.log.info("배지 감소 관측(%d/%d회) — 기준선 보류: %s %d → %d",
