@@ -438,17 +438,36 @@ sudo systemctl restart tmg-agent
 
 ### Phase 2 — SD 쓰기 최소화 + 프로젝트 설치 (30분)
 ```bash
-# 이 폴더를 파이로 복사 (예: PC에서)
-scp -r "라즈베리파이_주문알림" pi@tmg-alert.local:~/
+# 파이에서 저장소를 통째로 받는다 (공개 저장소라 로그인 불필요)
+sudo apt install -y git
+git clone https://github.com/RealPinkRabbit/themango-macros.git ~/repo
 
-# 파이에서
-cd ~/라즈베리파이_주문알림
+cd ~/repo/라즈베리파이_주문알림
 sudo bash install/setup.sh          # 패키지·tmpfs·journald·swap off·systemd 유닛까지 한 번에
-sudo nano /etc/tmg-alert/config.yaml # 아이디/비번/스피커 MAC/주기 입력
+sudo nano /etc/tmg-alert/config.yaml # 아이디/비번/주기 입력
 sudo reboot
 ```
 - ✅ 통과: 재부팅 후 `free -h`에 Swap 0, `mount | grep tmpfs` 에 `/var/log` `/tmp` 보임,
   `systemctl status tmg-agent` 가 `active (running)`
+
+> ★ **저장소를 받은 자리에서 그대로 설치할 것.** `setup.sh` 는 자기 위치의 상위 폴더를 소스로
+> 잡아 `/opt/tmg-alert` 로 배치하므로, 파일을 다른 곳으로 옮기거나 복사할 필요가 없다.
+> 옮기면 `git pull` 이 "삭제됨" 상태와 충돌해 이후 갱신이 번거로워진다.
+
+### 코드 갱신 (2회차부터)
+
+PC 에서 GitHub 에 push 한 뒤, 파이에서 **한 줄**이면 끝난다.
+
+```bash
+cd ~/repo/라즈베리파이_주문알림 && git pull && sudo bash install/setup.sh
+```
+
+`setup.sh` 는 멱등이고, 이미 돌고 있던 서비스를 감지하면 **새 코드로 알아서 재시작**한다
+(`tmg-agent` + 알림판 화면을 고쳤을 때를 위해 `tmg-kiosk` 도). `/etc/tmg-alert/config.yaml` 은
+보존되며, 새로 추가된 설정 키는 코드의 기본값이 적용되므로 손댈 필요가 없다.
+
+> 파이에서 파일을 직접 고치지 말 것. 고치면 다음 `git pull` 이 충돌한다.
+> 실수로 고쳤다면 `git checkout -- .` 로 되돌리고, 그래도 꼬이면 `git fetch origin && git reset --hard origin/main`.
 
 ### Phase 3 — 브라우저 로그인·가져오기 검증 (30분)
 ```bash
@@ -564,6 +583,7 @@ journalctl -u tmg-agent --since -1h | grep -i error
 tail -f /var/lib/tmg-alert/events.log       # 사건 기록(SD, 재부팅해도 남음) — 3-3장
 grep -E "야간|배지|알림" /var/lib/tmg-alert/events.log | tail -40   # 밤사이 무슨 일이 있었나
 sudo systemctl restart tmg-agent            # 에이전트만 재시작
+cd ~/repo/라즈베리파이_주문알림 && git pull && sudo bash install/setup.sh   # ★ 코드 갱신 (재시작까지 자동)
 curl -X POST 127.0.0.1:8080/api/test        # 테스트 알림
 curl -s 127.0.0.1:8080/api/state | python3 -m json.tool   # 현재 상태 JSON
 sudo nano /etc/tmg-alert/config.yaml && sudo systemctl restart tmg-agent

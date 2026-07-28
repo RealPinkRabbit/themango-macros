@@ -22,7 +22,7 @@ id "$RUN_USER" >/dev/null 2>&1 || { echo "사용자 $RUN_USER 가 없습니다";
 RUN_UID="$(id -u "$RUN_USER")"
 
 # ---------------------------------------------------------------- 1. 패키지
-say "1/9 패키지 설치"
+say "1/10 패키지 설치"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
 apt-get install -y --no-install-recommends \
@@ -43,7 +43,7 @@ apt-get install -y chromium-driver || apt-get install -y chromium-chromedriver |
   warn "chromedriver 패키지를 못 찾았습니다. 'apt search chromedriver' 로 확인하세요."
 
 # ---------------------------------------------------------------- 2. 배치
-say "2/9 애플리케이션 배치: $APP_DIR"
+say "2/10 애플리케이션 배치: $APP_DIR"
 mkdir -p "$APP_DIR"
 rm -rf "$APP_DIR/agent" "$APP_DIR/tools"
 cp -r "$SRC_DIR/agent" "$SRC_DIR/tools" "$APP_DIR/"
@@ -52,7 +52,7 @@ mkdir -p "$APP_DIR/userscripts"          # 향후 .user.js 를 여기에 둔다
 mkdir -p "$APP_DIR/extensions"           # 더망고 확장(압축 해제 폴더)을 여기에 둔다 — RAM 아닌 SD 에 영구 보관
 chown -R "$RUN_USER":"$RUN_USER" "$APP_DIR"
 
-say "3/9 파이썬 가상환경"
+say "3/10 파이썬 가상환경"
 if [[ ! -x "$APP_DIR/venv/bin/python" ]]; then
   python3 -m venv "$APP_DIR/venv"
 fi
@@ -60,11 +60,11 @@ fi
 "$APP_DIR/venv/bin/pip" install -r "$APP_DIR/requirements.txt"
 chown -R "$RUN_USER":"$RUN_USER" "$APP_DIR/venv"
 
-say "4/9 효과음 생성"
+say "4/10 효과음 생성"
 "$APP_DIR/venv/bin/python" "$APP_DIR/tools/make_sounds.py" "$APP_DIR/sounds"
 chown -R "$RUN_USER":"$RUN_USER" "$APP_DIR/sounds"
 
-say "5/9 설정 파일"
+say "5/10 설정 파일"
 mkdir -p "$CFG_DIR" /var/lib/tmg-alert
 if [[ -f "$CFG_DIR/config.yaml" ]]; then
   echo "  기존 설정 유지: $CFG_DIR/config.yaml"
@@ -82,7 +82,7 @@ EOF
 systemd-tmpfiles --create /etc/tmpfiles.d/tmg-alert.conf || true
 
 # ---------------------------------------------------------------- 6. SD 쓰기 최소화
-say "6/9 SD카드 쓰기 최소화"
+say "6/10 SD카드 쓰기 최소화"
 
 # (a) 스왑 완전 제거 — SD 쓰기의 최대 주범
 if systemctl list-unit-files | grep -q dphys-swapfile; then
@@ -143,14 +143,14 @@ fi
 echo "  하드웨어 워치독 활성 (시스템 전체 프리즈 시 자동 리셋)"
 
 # ---------------------------------------------------------------- 7. 오디오
-say "7/9 오디오 권한 (유선 스피커 — USB 또는 3.5mm)"
+say "7/10 오디오 권한 (유선 스피커 — USB 또는 3.5mm)"
 usermod -aG audio,video,tty "$RUN_USER" || true
 loginctl enable-linger "$RUN_USER"        # 로그인 없이도 PipeWire 사용자 세션이 돌게
 sudo -u "$RUN_USER" XDG_RUNTIME_DIR="/run/user/$RUN_UID" systemctl --user enable pipewire pipewire-pulse wireplumber 2>/dev/null || \
   warn "PipeWire 사용자 서비스 활성화는 재부팅 후 자동으로 됩니다"
 
 # ---------------------------------------------------------------- 8. 키오스크
-say "8/9 키오스크 화면 설정"
+say "8/10 키오스크 화면 설정"
 CHROME_BIN="$(command -v chromium || command -v chromium-browser)"
 
 # ★ Xorg 래퍼 권한 — 이게 없으면 비root 사용자의 X 실행이 거부된다.
@@ -191,7 +191,7 @@ else
 fi
 
 # ---------------------------------------------------------------- 9. systemd 유닛
-say "9/9 systemd 유닛"
+say "9/10 systemd 유닛"
 
 cat > /etc/systemd/system/tmg-xvfb.service <<EOF
 [Unit]
@@ -315,6 +315,39 @@ EOF
 
 systemctl daemon-reload
 systemctl enable tmg-xvfb.service tmg-wm.service tmg-agent.service tmg-kiosk.service tmg-reboot.timer
+
+# ---------------------------------------------------------------- 10. 재시작
+# 이미 돌고 있던 서비스라면 = 코드 갱신이므로 새 코드로 바로 재시작한다.
+# (첫 설치 때는 아직 설정을 못 채웠으므로 건드리지 않는다 — 아래 안내대로 진행)
+say "10/10 서비스 재시작"
+UPDATED=0
+if systemctl is-active --quiet tmg-agent; then
+  systemctl restart tmg-agent
+  echo "  tmg-agent 재시작"
+  UPDATED=1
+fi
+# 알림판(index.html)은 키오스크 브라우저가 한 번 읽고 캐시하므로, 화면을 고쳤으면
+# 키오스크도 같이 재시작해야 반영된다.
+if systemctl is-active --quiet tmg-kiosk; then
+  systemctl restart tmg-kiosk
+  echo "  tmg-kiosk 재시작 (알림판 화면 갱신)"
+  UPDATED=1
+fi
+
+if [[ $UPDATED -eq 1 ]]; then
+  cat <<EOF
+
+────────────────────────────────────────────────────────────
+ 코드 갱신 완료 — 서비스가 새 코드로 재시작되었습니다.
+
+ 확인
+      systemctl status tmg-agent --no-pager
+      sudo journalctl -u tmg-agent -n 30 --no-pager
+      cat /var/lib/tmg-alert/events.log        # 재부팅해도 남는 사건 기록
+────────────────────────────────────────────────────────────
+EOF
+  exit 0
+fi
 
 cat <<EOF
 
