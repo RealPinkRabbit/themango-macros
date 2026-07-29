@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         더망고 신규상품수집 - 저장상품수 일괄변경
 // @namespace    solddeul.tmg
-// @version      1.1
-// @description  신규상품수집 목록의 모든 필터에 대해 "저장상품수(limit_count)"를 지정값(기본 100)으로 일괄 변경. 팝업/새로고침 없이 fetch로 수정폼을 읽어 limit_count만 바꿔 저장(다른 설정 보존).
+// @version      1.2
+// @description  신규상품수집 목록의 모든 필터에 대해 "저장상품수(limit_count)"를 지정값(기본 100)으로 일괄 변경. 팝업/새로고침 없이 fetch로 수정폼을 읽어 limit_count만 바꿔 저장(다른 설정 보존). 대상 사이트 목록은 페이지의 '-- 수집사이트 --' 셀렉트에서 그대로 읽어오므로 사이트가 추가되면 자동 반영.
 // @match        https://tmg4682.mycafe24.com/mall/admin/shop/getGoodsCategory.php*
 // @run-at       document-idle
 // @grant        none
@@ -92,21 +92,39 @@ async function run(){
 }
 
 // ---------- UI ----------
+// 대상 사이트 목록은 페이지 상단 검색폼의 '-- 수집사이트 --' 셀렉트(select[name=site_id])를 그대로 읽는다.
+// → 더망고에 소싱사이트가 추가되면 코드 수정 없이 드롭박스에 자동으로 나타난다.
+// value가 빈 옵션(안내문 '-- 수집사이트 --', 구분선 '-----')은 제외한다.
+function siteOptions(){
+  var src=document.querySelector('form[name=fm_search] select[name=site_id]') || document.querySelector('select[name=site_id]');
+  var html='<option value="">전체</option>', n=0;
+  if(src){
+    Array.prototype.slice.call(src.options).forEach(function(o){
+      var v=(o.value||'').trim(); if(!v) return;
+      var t=(o.text||v).trim().replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+      html+='<option value="'+v+'">'+t+'</option>'; n++;
+    });
+  }
+  return {html:html, count:n};
+}
 function set(m){ var s=q('#tmgStat2'); if(s) s.textContent=m; }
 function setBtn(running){ var b=q('#tmgGo'); if(b){ b.disabled=running; b.textContent=running?'실행중...':'시작'; } var st=q('#tmgStop2'); if(st) st.style.display=running?'':'none'; }
 function ui(){
   if(q('#tmgPanel2')) return;
+  var so=siteOptions();
   var p=document.createElement('div'); p.id='tmgPanel2';
   p.style.cssText='position:fixed;top:10px;right:10px;z-index:2147483647;background:#fff;border:2px solid #337ab7;border-radius:8px;padding:10px 12px;width:270px;font:12px/1.6 "맑은 고딕",sans-serif;box-shadow:0 2px 10px rgba(0,0,0,.25)';
   p.innerHTML='<div style="font-weight:bold;margin-bottom:6px">저장상품수 일괄변경</div>'
    +'<div style="margin-bottom:4px">저장상품수: <input id="tmgTarget" type="number" value="100" min="1" style="width:70px"> 개</div>'
-   +'<div style="margin-bottom:4px">대상: <select id="tmgSite"><option value="">전체</option><option value="a_rt">ABCmart</option><option value="zara_de">Zara.com/de</option></select></div>'
+   +'<div style="margin-bottom:4px">대상: <select id="tmgSite">'+so.html+'</select></div>'
    +'<button id="tmgGo">시작</button> <button id="tmgStop2" style="display:none;color:#d9534f">정지</button>'
    +'<div id="tmgStat2" style="margin-top:8px;color:#333;min-height:32px">대기중</div>'
    +'<div style="margin-top:6px;color:#888;font-size:11px">※ 필터 설정은 유지되고 저장상품수만 변경됩니다.</div>';
   document.body.appendChild(p);
   q('#tmgGo').onclick=run;
   q('#tmgStop2').onclick=function(){ stop=true; };
+  // 조용히 '전체'만 남는 상황을 만들지 않는다 — 셀렉트를 못 찾았으면 화면에 알린다.
+  if(!so.count) set("주의: 페이지에서 '-- 수집사이트 --' 목록을 찾지 못해 '전체'만 선택할 수 있습니다.");
 }
 if(document.readyState==='complete') ui(); else window.addEventListener('load', ui);
 })();
