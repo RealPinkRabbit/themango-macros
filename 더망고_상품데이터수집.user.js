@@ -33,6 +33,11 @@ function st_msg(m){ var st=q('#tmgStat'); if(st) st.textContent=m; }
 function nav(site){ location.href='getGoods.php?tab_type='+site+'&_ts='+Date.now(); }
 function doSearch(){ if(typeof set_search_extension==='function'){ set_search_extension('1'); } else { var b=q('a.defbtn_med.dtype2'); if(b) b.click(); } }
 function codeLabel(c){ return SITE_LABEL[c]||c; }
+// 화면 표기는 엑셀 I3(수집사이트)에 사용자가 적은 값을 그대로 쓴다. 없으면 내장 라벨로 폴백.
+function siteLabel(c){
+  try{ var m=JSON.parse(localStorage.getItem('tmg_meta_v3')||'{}'); if(m[c]&&m[c].label) return m[c].label; }catch(e){}
+  return codeLabel(c);
+}
 
 async function waitFor(cond, timeout, interval, label){
   timeout=timeout||240000; interval=interval||1500; var t0=Date.now();
@@ -76,7 +81,7 @@ function parseWorkbook(wb){
       var code=siteCode(site,u); if(!code) continue;
       var name=(biz?biz+'-':'')+site+'-'+b;         // 엑셀 C열 수식과 동일: 사업자명-사이트-카테고리
       (data[code]=data[code]||[]).push({name:name,url:u});
-      if(!meta[code]) meta[code]={label:codeLabel(code), site:site, biz:biz, count:0};
+      if(!meta[code]) meta[code]={label:site, site:site, biz:biz, count:0};   // label = 엑셀 I3 원문
       meta[code].count++;
     }
   });
@@ -100,6 +105,45 @@ function handleFile(file){
   reader.readAsArrayBuffer(file);
 }
 
+// ---------- 엑셀 양식 다운로드 ----------
+// [솔데글KR]상품수집 목록.xlsx 와 동일한 열 구성으로 빈 양식을 생성한다.
+// 매크로가 실제로 읽는 칸: H3(사업자명) · I3(수집사이트) · B열(수집카테고리) · D열(URL). 시트명은 자유(단 '원본' 포함 시 무시).
+var TMPL_ROWS=200;
+function tmplSheet(site, sample){
+  var head=['','수집카테고리','필터이름','URL','수집상품 개수','필터 누적 매출금액','','사업자명','수집사이트','총 상품개수','매출합계'];
+  var aoa=[[],head];
+  for(var i=0;i<TMPL_ROWS;i++){
+    var s=sample&&sample[i];
+    aoa.push(['', s?s[0]:'', '', s?s[1]:'', 100, '', '', '', '', '', '']);
+  }
+  var ws=XLSX.utils.aoa_to_sheet(aoa);
+  // 수식 셀은 캐시값(v)이 없으면 SheetJS가 기록하지 않으므로 v를 함께 넣는다.
+  for(var r=3;r<3+TMPL_ROWS;r++) ws['C'+r]={t:'str',v:'',f:'$H$3&"-"&$I$3&"-"&B'+r};   // 필터이름 = 사업자명-수집사이트-카테고리
+  ws['H3']={t:'s',v:''};                 // ← 사업자명 직접 입력
+  ws['I3']={t:'s',v:site||''};           // ← 수집사이트(라벨)
+  ws['J3']={t:'n',v:0,f:'SUM(E:E)'};
+  ws['K3']={t:'n',v:0,f:'SUM(F:F)'};
+  ws['!cols']=[{wch:2},{wch:26},{wch:34},{wch:60},{wch:12},{wch:16},{wch:2},{wch:14},{wch:12},{wch:12},{wch:12}];
+  return ws;
+}
+function downloadTemplate(){
+  try{
+    var wb=XLSX.utils.book_new();
+    var guide=tmplSheet('ABC마트',[
+      ['남성-스니커즈-라이프스타일','https://abcmart.a-rt.com/display/category/main?genderGbnCode=10000&ctgId=1'],
+      ['여성-원피스-미디','https://www.zara.com/kr/ko/woman-dresses-midi-l1081.html']
+    ]);
+    guide['H5']={t:'s',v:'H3=사업자명, I3=수집사이트를 반드시 채우세요.'};
+    guide['H6']={t:'s',v:'수집사이트(I3)는 자유롭게 적어도 됩니다(패널 버튼에 그대로 표시). 아래 이름이 아니면 D열 URL로 사이트를 판별합니다: '+Object.keys(LABEL_TO_CODE).join(' / ')};
+    guide['H7']={t:'s',v:'B열=수집카테고리, D열=URL만 채우면 됩니다(C열 수식·E열은 그대로).'};
+    guide['H8']={t:'s',v:"시트를 사이트별로 추가하세요. 시트명에 '원본'이 들어가면 매크로가 무시합니다."};
+    XLSX.utils.book_append_sheet(wb, guide, '원본(예시·설명)');
+    XLSX.utils.book_append_sheet(wb, tmplSheet('',null), '사이트1');
+    XLSX.writeFile(wb, '상품수집 목록_양식.xlsx');
+    st_msg('양식을 다운로드했습니다.');
+  }catch(e){ alert('양식 생성 실패: '+(e&&e.message||e)); }
+}
+
 // ---------- 패널 ----------
 function ui(){
   if(q('#tmgPanel')){ render(); renderButtons(); renderBanword(); return; }
@@ -107,7 +151,8 @@ function ui(){
   p.style.cssText='position:fixed;top:10px;right:10px;z-index:2147483647;background:#fff;border:2px solid #d9534f;border-radius:8px;padding:10px 12px;width:260px;font:12px/1.5 "맑은 고딕",sans-serif;box-shadow:0 2px 10px rgba(0,0,0,.25)';
   p.innerHTML='<div style="font-weight:bold;margin-bottom:6px">더망고 자동수집 v3 (엑셀연동)</div>'
    +'<div id="tmgStat" style="margin-bottom:8px;color:#333;min-height:20px"></div>'
-   +'<button id="tmgLoad">엑셀 불러오기(.xlsx)</button>'
+   +'<button id="tmgLoad">엑셀 불러오기(.xlsx)</button> '
+   +'<button id="tmgTmpl">양식 받기</button>'
    +'<input type="file" id="tmgFile" accept=".xlsx" style="display:none">'
    +'<div style="margin:8px 0 4px"><label style="display:block;color:#333;margin-bottom:2px">금지어 템플릿</label><select id="tmgBanword" style="width:100%;box-sizing:border-box"></select></div>'
    +'<div id="tmgSites" style="margin:8px 0"></div>'
@@ -116,6 +161,7 @@ function ui(){
    +'<button id="tmgStop" style="color:#d9534f">정지</button>';
   document.body.appendChild(p);
   q('#tmgLoad').onclick=function(){ q('#tmgFile').click(); };
+  q('#tmgTmpl').onclick=function(){ downloadTemplate(); };
   q('#tmgFile').onchange=function(e){ if(e.target.files&&e.target.files[0]) handleFile(e.target.files[0]); };
   q('#tmgBanword').onchange=function(e){ setBW(e.target.value); };
   q('#tmgResume').onclick=function(){ resume(); };
@@ -144,23 +190,23 @@ function renderButtons(){
   var box=q('#tmgSites'); if(!box) return;
   var data=loadData(); var codes=Object.keys(data);
   if(!codes.length){ box.innerHTML='<span style="color:#888">엑셀을 먼저 불러오세요.</span>'; return; }
-  box.innerHTML=codes.map(function(c){ return '<button data-code="'+c+'" class="tmgStart" style="margin:2px 4px 2px 0">'+codeLabel(c)+' 시작 ('+data[c].length+')</button>'; }).join('');
+  box.innerHTML=codes.map(function(c){ return '<button data-code="'+c+'" class="tmgStart" style="margin:2px 4px 2px 0">'+siteLabel(c)+' 시작 ('+data[c].length+')</button>'; }).join('');
   Array.prototype.slice.call(box.querySelectorAll('.tmgStart')).forEach(function(btn){ btn.onclick=function(){ start(btn.getAttribute('data-code')); }; });
 }
 function render(){
   var st=q('#tmgStat'); if(!st) return; var s=gs();
   if(s.running && s.site){
     var d=loadData(); var tot=d[s.site]?d[s.site].length:0;
-    st.innerHTML='실행중: <b>'+codeLabel(s.site)+'</b> ('+(s.phase||'search')+')<br>진행 '+(s.index||0)+' / '+tot+'<br><span style="color:#888;font-size:11px">'+(s.last||'')+'</span>';
+    st.innerHTML='실행중: <b>'+siteLabel(s.site)+'</b> ('+(s.phase||'search')+')<br>진행 '+(s.index||0)+' / '+tot+'<br><span style="color:#888;font-size:11px">'+(s.last||'')+'</span>';
   } else if(s.error){ st.innerHTML='<span style="color:#d9534f">중단됨<br>'+(s.last||'')+'<br>'+s.error+'</span>'; }
-  else if(s.done){ st.textContent='완료: '+codeLabel(s.site||''); }
+  else if(s.done){ st.textContent='완료: '+siteLabel(s.site||''); }
   else { st.textContent='대기중'; }
 }
 
 // ---------- 실행 ----------
 async function start(site){
   var data=loadData(); var rows=data[site]||[];
-  if(!rows.length){ alert('데이터 없음: '+codeLabel(site)+'\n엑셀을 먼저 불러오세요.'); return; }
+  if(!rows.length){ alert('데이터 없음: '+siteLabel(site)+'\n엑셀을 먼저 불러오세요.'); return; }
   var skip=q('#tmgSkip') && q('#tmgSkip').checked;
   var existing=[]; if(skip){ st_msg('기존 필터 확인 중...'); existing=await fetchExisting(); }
   ss({running:true, site:site, index:0, phase:'search', skip:skip, existing:existing, last:'', error:'', done:false});
@@ -187,7 +233,7 @@ async function loop(){
       // ===== SEARCH phase (clean page) =====
       var existing=s.existing||[];
       while(s.index<rows.length && s.skip && existing.indexOf(rows[s.index].name)>=0){ s.index++; }
-      if(s.index>=rows.length){ s.running=false; s.done=true; ss(s); render(); alert(codeLabel(site)+' 전체 완료 ('+rows.length+'행)'); return; }
+      if(s.index>=rows.length){ s.running=false; s.done=true; ss(s); render(); alert(siteLabel(site)+' 전체 완료 ('+rows.length+'행)'); return; }
       var row=rows[s.index];
       s.phase='save'; s.last='['+(s.index+1)+'/'+rows.length+'] '+row.name; ss(s); render();
       await sleep(500);
