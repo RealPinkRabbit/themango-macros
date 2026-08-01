@@ -133,8 +133,15 @@ async function searchWait(m,kw){
 }
 // ★11ST(2026-07-15 실측): 사이트 search_category()는 국내/해외 라디오와 무관하게 '해외 트리'만 반환하고 이름으론 국내/해외 구분 불가 → 11번가는 admin_config_marketinfo.php를 seller_type2로 직접 호출해 종류별 트리를 수집(자동=독일자라는 기본 '해외', 해외=1/국내=2). 응답 JSON "코드@?@경로".
 var ELEVEN_TYPE_LS='tmg_auto_11st_type_v1';
-function eleven11Type(){ try{ return (localStorage.getItem(ELEVEN_TYPE_LS)==='국내')?'국내':'해외'; }catch(e){ return '해외'; } }   // 독일자라=해외 기본
-function set11stRadio(type){ var id=(type==='해외')?'openmarket_seller_type2_1':'openmarket_seller_type2_2'; var r=document.getElementById(id); if(r && !r.checked){ try{ r.click(); }catch(e){} } }
+// ★기본값을 두지 않는다(미선택=''). 예전에 '해외' 기본이라 국내자라를 해외로 저장하는 실수가 났다 → 시작 전 반드시 명시 선택.
+function eleven11Type(){ try{ var v=localStorage.getItem(ELEVEN_TYPE_LS); return (v==='국내'||v==='해외')?v:''; }catch(e){ return ''; } }
+// ★미선택('')이면 아무 라디오도 건드리지 않고 false를 돌려준다(조용히 국내로 찍히는 것을 방지).
+function set11stRadio(type){
+  if(type!=='국내' && type!=='해외') return false;
+  var id=(type==='해외')?'openmarket_seller_type2_1':'openmarket_seller_type2_2';
+  var r=document.getElementById(id); if(r && !r.checked){ try{ r.click(); }catch(e){} }
+  return true;
+}
 async function marketInfo11st(kw, sellerType){
   var body='pmode=search_category&site=11ST&search_text='+encodeURIComponent(kw)+'&seller_type2='+sellerType+'&openmarket_id=&from_category=Y';
   var t=await fetch(DIR()+'admin_config_marketinfo.php',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/x-www-form-urlencoded;charset=UTF-8'},body:body}).then(function(r){return r.text();}).catch(function(){return '[]';});
@@ -211,8 +218,10 @@ function serializeForm(form){ var fd=new FormData(form); var p=new URLSearchPara
 // Export: 카탈로그 + 매핑 템플릿 → 엑셀 다운로드
 // =========================================================================
 async function runExport(){
-  var pending=gs(); var targetLabel=(pending&&pending.targetLabel)||'독일자라';
+  var pending=gs(); var targetLabel=(pending&&pending.targetLabel)||'';
   var queue=(pending&&pending.queue)||[];
+  if(!targetLabel){ setStat('대상 라벨이 비어있습니다. 목록 페이지에서 다시 시작하세요.'); return; }
+  if(!eleven11Type()){ setStat('11번가 카테고리(국내/해외)가 선택되지 않았습니다. 목록 페이지에서 선택 후 다시 시작하세요.'); return; }
   if(!queue.length){ setStat('대상 필터 목록이 비어있습니다. 목록 페이지에서 다시 시작하세요.'); return; }
   // 설정페이지의 마켓 검색 요소/함수가 준비될 때까지 대기(로드 직후엔 없을 수 있음)
   setStat('설정페이지 로딩 대기...');
@@ -310,6 +319,7 @@ async function applyFilter(state){
 
 async function runApplyPage(){
   var state=gs(); if(!state || state.mode!=='apply' || !state.running) return;
+  if(!eleven11Type()){ state.running=false; ss(state); setStat('중단 — 11번가 카테고리(국내/해외) 선택이 없습니다. 목록 페이지에서 선택 후 다시 시작하세요.'); return; }
   var m=location.search.match(/ps_ftid=(\d+)/); var curId=m?m[1]:null;
   if(state.idx>=state.queue.length){ finishApply(state); return; }
   var want=state.queue[state.idx];
@@ -377,20 +387,33 @@ async function runReadback(targetLabel){
 function setStat(m){ var s=q('#tmgStat'); if(s) s.textContent=m; var s2=q('#tmgStat2'); if(s2) s2.textContent=m; }
 function panelList(){
   if(q('#tmgAfPanel')) return;
+  // ★목록 페이지에 새로 들어왔고 진행 중인 작업이 없으면 이전 선택을 지운다.
+  //   저장값을 복원하면 지난번 값(예 '국내')이 그대로 떠서 사실상 기본값처럼 동작한다 → 매번 명시 선택을 강제.
+  //   (수집·적용은 페이지를 넘나들므로 진행 중에는 저장값을 유지해야 한다.)
+  var _st=gs();
+  if(!(_st && (_st.mode==='export' || (_st.mode==='apply' && _st.running)))){
+    try{ localStorage.removeItem(ELEVEN_TYPE_LS); }catch(e){}
+  }
   var p=document.createElement('div'); p.id='tmgAfPanel';
   p.style.cssText='position:fixed;top:10px;right:10px;z-index:2147483647;background:#fff;border:2px solid #6f42c1;border-radius:8px;padding:10px 12px;width:330px;font:12px/1.6 "맑은 고딕",sans-serif;box-shadow:0 2px 10px rgba(0,0,0,.25)';
   p.innerHTML='<div style="font-weight:bold;margin-bottom:6px">카테고리매핑 자동 · 파일기반 v1</div>'
-   +'<div style="margin-bottom:6px">대상 라벨: <input id="tmgTarget" type="text" value="독일자라" style="width:110px"> <label style="font-size:11px"><input type="checkbox" id="tmgUnmapped"> 미매핑만</label></div>'
-   +'<div style="margin-bottom:6px">11번가 카테고리: <select id="tmg11stType"><option value="해외">해외</option><option value="국내">국내</option></select> <span style="color:#888;font-size:11px">독일자라=해외</span></div>'
+   +'<div style="margin-bottom:6px">대상 라벨: <input id="tmgTarget" type="text" placeholder="예: 국내자라" style="width:110px"> <label style="font-size:11px"><input type="checkbox" id="tmgUnmapped"> 미매핑만</label></div>'
+   +'<div style="margin-bottom:6px">11번가 카테고리: <select id="tmg11stType"><option value="">-- 선택 --</option><option value="해외">해외</option><option value="국내">국내</option></select> <span style="color:#888;font-size:11px">독일자라=해외 · 국내자라=국내</span></div>'
    +'<div style="margin-bottom:6px;border-top:1px solid #eee;padding-top:6px"><b>① 수집(Export)</b><br><button id="tmgExport">카탈로그+대상 엑셀 내보내기</button><br><span style="color:#888;font-size:11px">마켓 검색이 필요해 설정페이지로 이동해 수집(수 분 소요).</span></div>'
    +'<div style="margin-bottom:6px;border-top:1px solid #eee;padding-top:6px"><b>③ 적용(Apply)</b><br><input type="file" id="tmgFile" accept=".xlsx"><br><button id="tmgApply">매핑파일대로 적용 시작</button> <button id="tmgStop" style="color:#d9534f">정지</button></div>'
    +'<div style="border-top:1px solid #eee;padding-top:6px"><button id="tmgEval">실제 저장값 되읽기 검증</button></div>'
    +'<div id="tmgStat" style="margin-top:8px;color:#333;min-height:32px">대기중</div>'
    +'<div style="margin-top:6px;color:#888;font-size:11px">순서: ①엑셀 내보내기 → Claude가 매핑 시트 채움 → ③그 엑셀 불러와 적용 → 되읽기 검증. 진행 중 페이지 이동/팝업은 건드리지 마세요.</div>';
   document.body.appendChild(p);
-  var t11=q('#tmg11stType'); if(t11){ t11.value=eleven11Type(); t11.onchange=function(){ try{ localStorage.setItem(ELEVEN_TYPE_LS, t11.value==='국내'?'국내':'해외'); }catch(e){} setStat('11번가 카테고리 종류 = '+t11.value+' (수집·적용·평가에 반영)'); }; }
+  var t11=q('#tmg11stType'); if(t11){ t11.value=eleven11Type(); t11.onchange=function(){
+    try{ if(t11.value==='국내'||t11.value==='해외') localStorage.setItem(ELEVEN_TYPE_LS, t11.value); else localStorage.removeItem(ELEVEN_TYPE_LS); }catch(e){}
+    setStat(t11.value?('11번가 카테고리 종류 = '+t11.value+' (수집·적용·평가에 반영)'):'11번가 카테고리를 선택하세요.'); }; }
+  // 시작 전 필수 입력 확인 — 미선택 상태로 진행해 잘못된 트리에 저장되는 것을 막는다.
+  function need11(){ var v=eleven11Type(); if(!v){ setStat('먼저 11번가 카테고리(국내/해외)를 선택하세요. 국내자라=국내, 독일자라=해외.'); return null; } return v; }
+  function needTarget(){ var t=(q('#tmgTarget').value||'').trim(); if(!t){ setStat('대상 라벨을 입력하세요(예: 국내자라).'); return null; } return t; }
   q('#tmgExport').onclick=async function(){
-    var target=(q('#tmgTarget').value||'').trim()||'독일자라';
+    var target=needTarget(); if(!target) return;
+    if(!need11()) return;
     var onlyU=q('#tmgUnmapped').checked;
     setStat('['+target+'] 대상 필터 수집 중...');
     var queue; try{ queue=await buildQueue(target, onlyU); }catch(e){ setStat('대상 수집 실패: '+e.message); return; }
@@ -401,6 +424,7 @@ function panelList(){
     location.href=DIR()+'admin_category_set.php?tm=F&ps_ftid='+first.id;
   };
   q('#tmgApply').onclick=function(){
+    if(!need11()) return;
     var f=q('#tmgFile').files[0]; if(!f){ setStat('먼저 매핑 엑셀(.xlsx)을 선택하세요.'); return; }
     var rd=new FileReader();
     rd.onload=async function(e){
@@ -417,7 +441,7 @@ function panelList(){
     rd.readAsArrayBuffer(f);
   };
   q('#tmgStop').onclick=function(){ var s=gs(); if(s){ s.running=false; ss(s); } setStat('정지 요청됨.'); };
-  q('#tmgEval').onclick=function(){ var target=(q('#tmgTarget').value||'').trim()||'독일자라'; runReadback(target); };
+  q('#tmgEval').onclick=function(){ var target=needTarget(); if(!target) return; if(!need11()) return; runReadback(target); };
 }
 function panelSetExport(){
   if(q('#tmgSetPanel')) return;
