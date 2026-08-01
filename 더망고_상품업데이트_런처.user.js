@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         더망고 상품업데이트 런처
 // @namespace    solddeul.tmg
-// @version      1.2
-// @description  상품업데이트&마켓전송 화면의 설정(수집사이트/업데이트항목/전송마켓/변동일/범위)을 프리셋으로 저장해 두고, 범위를 구간으로 나눠 여러 창을 한꺼번에 띄운다. 구간마다 전송마켓을 따로 지정할 수 있다. 새로 열린 창은 프리셋과 실제 화면을 대조해 일치할 때만 시작 버튼을 열어 준다. 시작 클릭은 사람이 한다.
+// @version      1.3
+// @description  상품업데이트&마켓전송 화면의 설정(수집사이트/업데이트항목/전송마켓/변동일/범위)을 프리셋으로 저장해 두고, 범위를 구간으로 나눠 여러 창을 한꺼번에 띄운다. 구간마다 전송마켓을 따로 지정할 수 있다. 새로 열린 창은 프리셋과 실제 화면을 대조해 일치할 때만 시작 버튼을 열어 준다. [실행]은 창만 열고 사람이 시작을 누르며, [실행+자동시작]은 확인창 1회를 거쳐 각 창이 대조 통과 후 스스로 시작한다.
 // @match        https://tmg4682.mycafe24.com/mall/admin/admin_goods_update.php*
 // @run-at       document-idle
 // @grant        none
@@ -18,6 +18,23 @@
 //  · ★ ps_status/ps_chd 셀렉트는 <form> 바깥(DIV)에 있다. form.elements에는 들어 있지만
 //    'form select[name=…]' 같은 자손 선택자로는 절대 찾히지 않는다 (v1.0의 버그).
 //    → 반드시 document.search_form.<name> 으로 접근할 것.
+//
+// ── 자동시작 관련 실측 (v1.3에서 추가) ──────────────────────
+//  · 시작 버튼 2개(#update_start '검색결과모든상품' / #update_start_limit '범위')는
+//    ★둘 다 인자 없는 같은 함수 start_ini_all()을 호출한다. 어느 쪽을 눌렀는지는 전달되지 않는다.
+//  · ★★ 범위 실행이냐 전량 실행이냐는 오직 #sp_limit_info 의 display 로 갈린다.
+//    (start_ini_all 안: $('#sp_limit_info').css('display') != 'none' 이면 범위 모드)
+//    → 범위 UI가 닫힌 채로 시작하면 검색결과 전량이 돈다. 자동 클릭 직전에 반드시 확인할 것.
+//  · start_ini_all()의 첫 관문은 전역 boolean isLoaded 다. false면 '페이지 로딩중입니다' alert로 끝난다.
+//    → 자동 클릭 전에 isLoaded === true 를 기다린다.
+//  · start_ini_all()에는 alert가 7개, confirm은 0개다. 전부 사전 검증 가능한 거부 사유다:
+//    로딩중 / 범위 미입력 / 범위 순서 역전 / 사이트·마켓 없음 / 사이트 미선택 / 항목·마켓 미선택 /
+//    확장 사용 사이트 다중선택. → 클릭을 alert 후킹으로 감싸 메시지를 잡아 배너에 그대로 띄운다.
+//  · 시작 성공 신호 = update_btn_change('off')가 두 버튼 라벨을
+//    '상품업데이트 & 마켓전송이 진행중입니다...' 로 바꾼다. 이걸 폴링해 시작 여부를 판정한다.
+//  · ★ update_btn_change('on')은 attr('onclick','start_ini_all();')로 인라인 핸들러를 되살린다.
+//    → onclick 프로퍼티만 덮어쓰는 잠금은 배치가 끝나면 조용히 풀린다(v1.2의 잠재 버그).
+//      capture 단계 리스너로 잘라야 한다.
 // ────────────────────────────────────────────────────────────
 var SITES = [
   {v:'a_rt',               t:'ABCmart.a-rt.com'},
@@ -58,6 +75,8 @@ var MARKETS = [
 var ORDER = 'uid_asc';
 // 상품상태는 화면 기본값과 같은 '판매상품(재고+품절)' 고정. 패널에서 다루지 않는다.
 var STATUS = 'sale';
+// 자동시작 창별 취소 유예(초). 부모에서 확인창을 이미 받았으므로 짧게 둔다.
+var AUTO_DELAY = 5;
 
 var KEY_STORE = 'tmg_update_launcher_v1';
 var KEY_JOB   = 'tmg_update_job_';
@@ -69,6 +88,7 @@ function esc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').rep
 function sleep(ms){ return new Promise(function(r){ setTimeout(r,ms); }); }
 function uid(){ return Date.now().toString(36) + Math.random().toString(36).slice(2,7); }
 function nameOf(list, v){ var f = list.filter(function(x){ return x.v === v; })[0]; return f ? f.t : v; }
+function names(list, arr){ return (arr||[]).map(function(v){ return nameOf(list, v); }).join(', '); }
 
 // ────────────────────────────────────────────────────────────
 // 저장
@@ -217,7 +237,7 @@ async function openAll(jobs){
 }
 
 // ────────────────────────────────────────────────────────────
-// 자식 창 모드 — 대조 → 범위 주입 → 배너
+// 자식 창 모드 — 대조 → 범위 주입 → 배너 → (자동시작이면) 시작 클릭
 // ────────────────────────────────────────────────────────────
 function actualState(){
   var f = document.search_form;
@@ -250,11 +270,20 @@ function diff(job, act){
   return bad;
 }
 
+// ★ capture 단계에서 자른다.
+//   더망고 update_btn_change('on')이 attr('onclick','start_ini_all();')로 인라인 핸들러를 되살리므로
+//   onclick 프로퍼티만 덮어쓰면 배치가 끝난 뒤 잠금이 조용히 풀린다.
 function lockStart(id, msg){
   var e = document.getElementById(id);
-  if(!e) return;
+  if(!e || e.__tmgLocked) return;
+  e.__tmgLocked = true;
+  e.addEventListener('click', function(ev){
+    ev.preventDefault();
+    ev.stopImmediatePropagation();
+    alert(msg);
+  }, true);
   e.removeAttribute('onclick');
-  e.onclick = function(ev){ ev.preventDefault(); alert(msg); return false; };
+  e.onclick = null;
   e.style.opacity = '.35';
   e.title = msg;
 }
@@ -285,6 +314,104 @@ function banner(html, color){
   b.innerHTML = html;
 }
 
+// ── 자동시작 ────────────────────────────────────────────────
+function startBtnId(job){ return job.useRange ? 'update_start_limit' : 'update_start'; }
+
+// update_btn_change('off')가 두 버튼 라벨을 '…진행중입니다…'로 바꾼다 → 시작 성공 신호
+function startedYet(){
+  var t = '';
+  ['update_start','update_start_limit'].forEach(function(id){
+    var e = document.getElementById(id); if(e) t += (e.textContent || '');
+  });
+  return t.indexOf('진행중') >= 0;
+}
+
+// 범위 모드 판정은 화면과 동일하게 #sp_limit_info 의 display 로 한다.
+// 닫혀 있는데 시작하면 검색결과 전량이 돈다.
+function rangeUiOpen(){
+  var sp = document.getElementById('sp_limit_info');
+  if(!sp) return false;
+  return getComputedStyle(sp).display !== 'none';
+}
+
+async function autoStart(job, head){
+  var abort = false;
+  function say(html, color){
+    banner(html, color);
+    var b = document.getElementById('tmgAutoAbort');
+    if(b) b.onclick = function(){ abort = true; };
+  }
+  function stop(reason){
+    banner('⛔ ' + head + ' — <b>자동 시작을 취소했습니다.</b><br>&nbsp;&nbsp;· ' + esc(reason)
+      + '<br>&nbsp;&nbsp;· 설정을 확인한 뒤 <b>시작 버튼을 직접</b> 누르세요.', '#c9302c');
+  }
+
+  // 사전 차단 — start_ini_all의 '사이트·마켓 없음' alert 조건과 같다
+  if(!(job.items||[]).length && !(job.markets||[]).length){
+    stop('업데이트 항목도 전송 마켓도 없습니다. 아무 일도 하지 않습니다.'); return;
+  }
+
+  // start_ini_all()의 첫 관문 — isLoaded가 false면 '페이지 로딩중입니다'로 끝난다
+  var waited = 0;
+  while(window.isLoaded !== true){
+    if(abort){ stop('사용자가 취소했습니다.'); return; }
+    if(waited >= 30000){ stop('페이지 로딩(isLoaded)이 30초 안에 끝나지 않았습니다.'); return; }
+    say('⏳ ' + head + ' — 페이지 로딩 대기 중... <button id="tmgAutoAbort">자동 시작 취소</button>', '#b8860b');
+    await sleep(500); waited += 500;
+  }
+
+  // 창별 취소 유예
+  for(var i = AUTO_DELAY; i > 0; i--){
+    if(abort){ stop('사용자가 취소했습니다.'); return; }
+    say('⏳ ' + head + ' — <b>' + i + '초 후 자동 시작</b>합니다. '
+      + '<button id="tmgAutoAbort">자동 시작 취소</button>'
+      + '<br>&nbsp;&nbsp;· 마켓: ' + esc(names(MARKETS, job.markets) || '없음(업데이트만)')
+      + ' / 항목: ' + esc(names(ITEMS, job.items) || '없음(전송만)'), '#b8860b');
+    await sleep(1000);
+  }
+  if(abort){ stop('사용자가 취소했습니다.'); return; }
+
+  // 클릭 직전 재대조 — 로딩 도중 화면이 바뀌었을 수 있다
+  var bad = diff(job, actualState());
+  if(bad.length){ stop('클릭 직전 재대조에서 어긋났습니다: ' + bad.join(' / ')); return; }
+
+  if(job.useRange){
+    var sl = document.getElementById('start_limit'), el = document.getElementById('end_limit');
+    if(!sl || !el || sl.value !== String(job.start) || el.value !== String(job.end)){
+      stop('범위 값이 유지되지 않았습니다 (요청 ' + job.start + '~' + job.end + ').'); return;
+    }
+    // ★ 이 검사를 빼면 범위 UI가 닫힌 채 시작돼 검색결과 전량이 돈다
+    if(!rangeUiOpen()){ stop('범위 입력 영역이 닫혀 있습니다. 이대로 시작하면 검색결과 전량이 실행됩니다.'); return; }
+  }else if(rangeUiOpen()){
+    stop('범위 분할을 쓰지 않는 프리셋인데 범위 입력 영역이 열려 있습니다.'); return;
+  }
+
+  // 클릭 — start_ini_all()의 거부 alert를 잡아 배너로 보여 준다(삼키지 않는다).
+  var btn = document.getElementById(startBtnId(job));
+  if(!btn){ stop('시작 버튼을 찾지 못했습니다.'); return; }
+  var caught = [], orig = window.alert;
+  window.alert = function(m){ caught.push(String(m)); };
+  try{ btn.click(); }
+  catch(e){ caught.push('클릭 예외: ' + e.message); }
+  finally{ window.alert = orig; }
+
+  // 시작 성공 판정 — 버튼 라벨이 '진행중'으로 바뀌는지 폴링
+  var t = 0;
+  while(t < 8000 && !startedYet()){ await sleep(400); t += 400; }
+
+  if(!startedYet()){
+    stop('시작 신호가 확인되지 않았습니다.'
+      + (caught.length ? ' 더망고 메시지: ' + caught.join(' | ') : ' (더망고 메시지 없음)'));
+    return;
+  }
+  banner('▶ ' + head + ' — <b>자동 시작했습니다.</b>'
+    + (caught.length ? '<br>&nbsp;&nbsp;· ⚠ 더망고 메시지: ' + esc(caught.join(' | ')) : '')
+    + '<br>&nbsp;&nbsp;· 마켓: ' + esc(names(MARKETS, job.markets) || '없음(업데이트만)')
+    + ' / 항목: ' + esc(names(ITEMS, job.items) || '없음(전송만)')
+    + '<br>&nbsp;&nbsp;· ⚠ 더망고 설정(auto_repeat)에 의해 <b>완료 후 스스로 재시작</b>합니다. '
+    + '끝나면 창을 닫으세요 — 자동시작이라 방치하면 같은 구간을 무한 반복합니다.', '#1f7a3d');
+}
+
 function childMode(jid){
   var raw = localStorage.getItem(KEY_JOB + jid);
   if(!raw){ banner('⚠ 런처 작업 정보를 찾지 못했습니다. 이 창은 수동으로 확인하고 쓰세요.', '#e0a800'); return; }
@@ -302,20 +429,24 @@ function childMode(jid){
     lockStart('update_start', msg);
     lockStart('update_start_limit', msg);
     var lines = bad.concat(rangeErr ? ['범위 — ' + rangeErr] : []);
-    banner('⛔ ' + head + ' — <b>설정이 프리셋과 다릅니다. 시작을 잠갔습니다.</b><br>'
+    banner('⛔ ' + head + ' — <b>설정이 프리셋과 다릅니다. 시작을 잠갔습니다.</b>'
+      + (job.auto ? ' (자동 시작도 취소했습니다)' : '') + '<br>'
       + lines.map(function(x){ return '&nbsp;&nbsp;· ' + esc(x); }).join('<br>'), '#c9302c');
     return;
   }
 
   if(job.useRange){
-    // 범위 전용 창에서 '검색결과모든상품' 버튼을 잘못 누르면 전량이 돈다 → 잠근다.
+    // 범위 전용 창에서 '검색결과모든상품' 버튼을 잘못 누르면 헷갈리므로 잠근다.
+    // (실제 실행 범위는 버튼이 아니라 #sp_limit_info 의 display 가 정하지만, 표시를 명확히 하기 위해 유지)
     lockStart('update_start', '런처: 이 창은 구간 ' + job.start + '~' + job.end + ' 전용입니다. 아래 범위설정 시작 버튼을 쓰세요.');
   }
-  banner('✅ ' + head + ' · 준비완료 — <b>아래 시작 버튼을 직접 누르세요.</b>'
-    + '<br>&nbsp;&nbsp;· 마켓: ' + esc(job.markets.map(function(v){ return nameOf(MARKETS,v); }).join(', ') || '없음(업데이트만)')
-    + ' / 항목: ' + esc(job.items.map(function(v){ return nameOf(ITEMS,v); }).join(', ') || '없음(전송만)')
+  banner('✅ ' + head + ' · 준비완료 — <b>' + (job.auto ? '잠시 후 자동으로 시작합니다.' : '아래 시작 버튼을 직접 누르세요.') + '</b>'
+    + '<br>&nbsp;&nbsp;· 마켓: ' + esc(names(MARKETS, job.markets) || '없음(업데이트만)')
+    + ' / 항목: ' + esc(names(ITEMS, job.items) || '없음(전송만)')
     + '<br>&nbsp;&nbsp;· ' + esc(hintOf(job.items, job.markets))
     + '<br>&nbsp;&nbsp;· ⚠ 더망고 설정(auto_repeat)에 의해 완료 후 스스로 재시작합니다. 끝나면 창을 닫으세요.', '#1f7a3d');
+
+  if(job.auto) autoStart(job, head);
 }
 
 // ────────────────────────────────────────────────────────────
@@ -348,8 +479,8 @@ function checkRow(list, sel, kind){
 
 function mkSummary(mk){
   if(!mk.length) return '마켓없음(업데이트만)';
-  var names = mk.map(function(v){ return nameOf(MARKETS, v); });
-  return names.length <= 2 ? names.join(', ') : (names.slice(0,2).join(', ') + ' 외 ' + (names.length-2));
+  var nm = mk.map(function(v){ return nameOf(MARKETS, v); });
+  return nm.length <= 2 ? nm.join(', ') : (nm.slice(0,2).join(', ') + ' 외 ' + (nm.length-2));
 }
 
 function chunkList(p){
@@ -378,8 +509,9 @@ function chunkList(p){
 }
 
 function runLabel(){
-  var b = q('#tmgLRun');
-  if(b) b.textContent = '실행 (' + expand(cur).length + '창)';
+  var n = expand(cur).length;
+  var b = q('#tmgLRun');     if(b) b.textContent = '실행 (' + n + '창)';
+  var a = q('#tmgLRunAuto'); if(a) a.textContent = '실행+자동시작 (' + n + '창)';
 }
 
 // 구간 목록만 다시 그린다 — 패널 전체를 다시 그리면 스크롤이 맨 위로 튄다
@@ -421,8 +553,11 @@ function render(){
       + (cur.useRange ? chunkList(cur) : '<div style="color:#888">범위 분할을 사용하지 않습니다.</div>') + '</div>'
     + '</fieldset>'
   + '<div style="margin-top:8px"><button id="tmgLSave">저장</button> '
-      + '<button id="tmgLRun" style="font-weight:bold">실행</button>'
-      + '<span id="tmgLPendWrap"></span></div>';
+      + '<button id="tmgLRun" style="font-weight:bold">실행</button> '
+      + '<button id="tmgLRunAuto" style="font-weight:bold;color:#a94442;border-color:#a94442">실행+자동시작</button>'
+      + '<span id="tmgLPendWrap"></span></div>'
+  + '<div style="color:#888;font-size:11px;margin-top:3px">실행 = 창만 연다 · 실행+자동시작 = 확인 후 각 창이 대조를 통과하면 '
+      + AUTO_DELAY + '초 뒤 스스로 시작한다</div>';
 
   bindMain();
   bindChunks();
@@ -469,6 +604,58 @@ function collectSkip(){
   });
 }
 
+// 자동시작 확인창 문구 — 되돌리기 어려운 작업이므로 무엇이 나가는지 한 화면에 모은다
+function confirmText(jobs){
+  var sets = jobs.map(function(j){ return j.markets.slice().sort().join(','); });
+  var same = sets.every(function(x){ return x === sets[0]; });
+  var mk = same ? (names(MARKETS, jobs[0].markets) || '없음 (업데이트만)') : '★ 구간별로 다름';
+  var chdEl = q('#tmgLChd');
+  var chd = (chdEl && chdEl.selectedIndex >= 0) ? chdEl.options[chdEl.selectedIndex].text.trim() : '';
+  var lines = [
+    '[' + cur.name + '] 자동 시작',
+    '',
+    '· 수집사이트 : ' + nameOf(SITES, cur.site),
+    '· 업데이트항목 : ' + (names(ITEMS, cur.items) || '없음 (전송만)'),
+    '· 전송마켓 : ' + mk,
+    '· 변동일 : ' + (chd || '전체'),
+    '· 정렬 : 상품수집 날짜순(과거순)'
+  ];
+  if(jobs[0].useRange){
+    var cnt = jobs.reduce(function(a,j){ return a + (j.end - j.start + 1); }, 0);
+    lines.push('· 창 ' + jobs.length + '개 · 대상 ' + cnt.toLocaleString() + '건 ('
+      + jobs[0].start.toLocaleString() + ' ~ ' + jobs[jobs.length-1].end.toLocaleString() + ')');
+  }else{
+    lines.push('· 창 1개 · ★검색결과 전체');
+  }
+  lines.push('', '각 창은 설정 대조를 통과하면 ' + AUTO_DELAY + '초 뒤 스스로 시작합니다.',
+    '(창마다 취소 버튼이 뜹니다. 대조에 실패한 창은 시작하지 않습니다.)',
+    '', '마켓에 전송된 내용은 되돌리기 어렵습니다. 진행할까요?');
+  return lines.join('\n');
+}
+
+async function doRun(auto){
+  collect();
+  var jobs = expand(cur);
+  if(!jobs.length){ stat('<span style="color:#c9302c">열 작업이 없습니다.</span>'); return; }
+
+  if(auto){
+    if(!cur.items.length && !cur.markets.length
+       && jobs.every(function(j){ return !j.markets.length; })){
+      stat('<span style="color:#c9302c">업데이트 항목도 전송 마켓도 없습니다. 자동 시작할 수 없습니다.</span>');
+      return;
+    }
+    if(!confirm(confirmText(jobs))){ stat('자동 시작을 취소했습니다.'); return; }
+    jobs = jobs.map(function(j){ return Object.assign({}, j, {auto:true}); });
+  }
+
+  var r = await openAll(jobs);
+  pending = r.rest;
+  stat((r.blocked ? '<span style="color:#c9302c">팝업이 차단됐습니다. 이 사이트의 팝업을 허용한 뒤 아래 버튼을 누르세요.</span><br>' : '')
+    + '창 ' + r.opened + '개를 열었습니다. '
+    + (auto ? '각 창이 대조를 통과하면 <b>스스로 시작</b>합니다.' : '각 창에서 <b>시작 버튼을 직접</b> 누르세요.'));
+  renderPending();
+}
+
 function bindMain(){
   ['tmgLName','tmgLSite','tmgLChd','tmgLUse','tmgLTotal','tmgLFirst','tmgLSize'].forEach(function(id){
     var e = q('#' + id); if(e) e.onchange = function(){ collect(); render(); };
@@ -497,16 +684,8 @@ function bindMain(){
     save(store); head(); stat('저장했습니다.');
   };
 
-  q('#tmgLRun').onclick = async function(){
-    collect();
-    var jobs = expand(cur);
-    if(!jobs.length){ stat('<span style="color:#c9302c">열 작업이 없습니다.</span>'); return; }
-    var r = await openAll(jobs);
-    pending = r.rest;
-    stat((r.blocked ? '<span style="color:#c9302c">팝업이 차단됐습니다. 이 사이트의 팝업을 허용한 뒤 아래 버튼을 누르세요.</span><br>' : '')
-      + '창 ' + r.opened + '개를 열었습니다. 각 창에서 <b>시작 버튼을 직접</b> 누르세요.');
-    renderPending();
-  };
+  q('#tmgLRun').onclick     = function(){ doRun(false); };
+  q('#tmgLRunAuto').onclick = function(){ doRun(true); };
 }
 
 function renderPending(){
@@ -575,7 +754,7 @@ function panel(){
     + '<button id="tmgLNew">새로</button> <button id="tmgLDel">삭제</button></div>'
     + '<div id="tmgLBody"></div>'
     + '<div id="tmgLStat" style="margin-top:8px;color:#333;min-height:32px;border-top:1px solid #eee;padding-top:6px">대기중</div>'
-    + '<div style="margin-top:4px;color:#888;font-size:11px">※ 시작 버튼은 사람이 누릅니다. 런처는 창을 열고 설정을 대조만 합니다.</div>';
+    + '<div style="margin-top:4px;color:#888;font-size:11px">※ 자동시작은 대조를 통과한 창만 시작합니다. 끝난 창은 반드시 닫으세요(auto_repeat).</div>';
   document.body.appendChild(p);
 
   q('#tmgLPick').onchange = function(){
@@ -600,7 +779,7 @@ function panel(){
 // ────────────────────────────────────────────────────────────
 function boot(){
   var m = (location.hash || '').match(/tmglauncher=([a-z0-9]+)/i);
-  if(m) childMode(m[1]);   // 런처가 연 창 — 대조·범위주입만 하고 패널은 띄우지 않는다
+  if(m) childMode(m[1]);   // 런처가 연 창 — 대조·범위주입(·자동시작)만 하고 패널은 띄우지 않는다
   else  panel();
 }
 if(document.readyState === 'complete') boot(); else window.addEventListener('load', boot);
