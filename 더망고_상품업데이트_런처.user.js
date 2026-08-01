@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         더망고 상품업데이트 런처
 // @namespace    solddeul.tmg
-// @version      1.3
+// @version      1.3.1
 // @description  상품업데이트&마켓전송 화면의 설정(수집사이트/업데이트항목/전송마켓/변동일/범위)을 프리셋으로 저장해 두고, 범위를 구간으로 나눠 여러 창을 한꺼번에 띄운다. 구간마다 전송마켓을 따로 지정할 수 있다. 새로 열린 창은 프리셋과 실제 화면을 대조해 일치할 때만 시작 버튼을 열어 준다. [실행]은 창만 열고 사람이 시작을 누르며, [실행+자동시작]은 확인창 1회를 거쳐 각 창이 대조 통과 후 스스로 시작한다.
 // @match        https://tmg4682.mycafe24.com/mall/admin/admin_goods_update.php*
 // @run-at       document-idle
@@ -26,7 +26,9 @@
 //    (start_ini_all 안: $('#sp_limit_info').css('display') != 'none' 이면 범위 모드)
 //    → 범위 UI가 닫힌 채로 시작하면 검색결과 전량이 돈다. 자동 클릭 직전에 반드시 확인할 것.
 //  · start_ini_all()의 첫 관문은 전역 boolean isLoaded 다. false면 '페이지 로딩중입니다' alert로 끝난다.
-//    → 자동 클릭 전에 isLoaded === true 를 기다린다.
+//    ★★ 이 변수는 `let isLoaded` 로 선언돼 있어 window 에 붙지 않는다 → window.isLoaded 는 항상 undefined.
+//       v1.3.0이 이걸 몰라 자동시작이 매번 30초 대기 후 취소됐다. 반드시 맨이름으로 읽을 것(pageLoadedFlag).
+//       실측: 창이 열리고 약 0.8초 뒤 true 가 된다.
 //  · start_ini_all()에는 alert가 7개, confirm은 0개다. 전부 사전 검증 가능한 거부 사유다:
 //    로딩중 / 범위 미입력 / 범위 순서 역전 / 사이트·마켓 없음 / 사이트 미선택 / 항목·마켓 미선택 /
 //    확장 사용 사이트 다중선택. → 클릭을 alert 후킹으로 감싸 메시지를 잡아 배너에 그대로 띄운다.
@@ -334,44 +336,84 @@ function rangeUiOpen(){
   return getComputedStyle(sp).display !== 'none';
 }
 
+// ★★ 페이지 로딩 플래그는 `let isLoaded` 로 선언돼 있다 (2026-08-01 실측).
+//   전역 let/const 는 window 에 붙지 않는다 → window.isLoaded 는 영원히 undefined.
+//   v1.3.0이 window.isLoaded를 보는 바람에 자동시작이 항상 30초를 기다린 뒤 취소됐다.
+//   반드시 '맨이름'으로 읽는다. 선언 자체가 없거나 TDZ면 null을 돌려주고,
+//   그때는 이 플래그로 판정하지 않고 페이지 자신의 응답(alert)에 맡긴다.
+function pageLoadedFlag(){
+  try{ return (typeof isLoaded === 'undefined') ? null : (isLoaded === true); }
+  catch(e){ return null; }
+}
+
+// 자동시작 배너 — 취소 버튼은 딱 한 번만 만들고 다시 그리지 않는다.
+// (1초마다 배너 전체를 다시 그리면 클릭이 유실되거나, 왜 취소됐는지 헷갈린다)
+function autoPanel(head, onAbort){
+  banner('⏳ <b>' + head + '</b><br>&nbsp;&nbsp;<span id="tmgAutoMsg">준비 중…</span>'
+    + '<div style="margin-top:6px">'
+    + '<button id="tmgAutoAbort" style="font:bold 12px/1.4 \'맑은 고딕\',sans-serif;padding:3px 10px;cursor:pointer">'
+    + '자동 시작 취소</button>'
+    + '<span style="margin-left:8px;opacity:.9">← 취소는 이 버튼으로만 됩니다 (배너를 눌러도 취소되지 않습니다)</span>'
+    + '</div>', '#b8860b');
+  var b = document.getElementById('tmgAutoAbort');
+  if(b) b.addEventListener('click', function(ev){ ev.stopPropagation(); onAbort(); });
+}
+function autoMsg(html){
+  var m = document.getElementById('tmgAutoMsg');
+  if(m) m.innerHTML = html;
+}
+
+// 시작 버튼을 한 번 누르고 결과를 판정한다.
+//  { started:true } | { alerts:'…' }  ← 더망고가 거부하면 그 alert 문구가 판정 근거다
+async function pressStart(btn){
+  var caught = [], orig = window.alert;
+  window.alert = function(m){ caught.push(String(m)); };
+  try{ btn.click(); }
+  catch(e){ caught.push('클릭 예외: ' + e.message); }
+  finally{ window.alert = orig; }
+  // update_btn_change('off')는 start_ini_all 안에서 곧바로 불린다 → 짧게 폴링해도 충분하다
+  var t = 0;
+  while(t < 3000 && !startedYet()){ await sleep(200); t += 200; }
+  return {started: startedYet(), alerts: caught.join(' | ')};
+}
+
 async function autoStart(job, head){
   var abort = false;
-  function say(html, color){
-    banner(html, color);
-    var b = document.getElementById('tmgAutoAbort');
-    if(b) b.onclick = function(){ abort = true; };
-  }
   function stop(reason){
-    banner('⛔ ' + head + ' — <b>자동 시작을 취소했습니다.</b><br>&nbsp;&nbsp;· ' + esc(reason)
+    banner('⛔ ' + head + ' — <b>자동 시작을 하지 않았습니다.</b><br>&nbsp;&nbsp;· ' + esc(reason)
       + '<br>&nbsp;&nbsp;· 설정을 확인한 뒤 <b>시작 버튼을 직접</b> 누르세요.', '#c9302c');
   }
+  var CANCEL_BY_USER = '[자동 시작 취소] 버튼을 눌렀습니다.';
 
   // 사전 차단 — start_ini_all의 '사이트·마켓 없음' alert 조건과 같다
   if(!(job.items||[]).length && !(job.markets||[]).length){
     stop('업데이트 항목도 전송 마켓도 없습니다. 아무 일도 하지 않습니다.'); return;
   }
 
-  // start_ini_all()의 첫 관문 — isLoaded가 false면 '페이지 로딩중입니다'로 끝난다
-  var waited = 0;
-  while(window.isLoaded !== true){
-    if(abort){ stop('사용자가 취소했습니다.'); return; }
-    if(waited >= 30000){ stop('페이지 로딩(isLoaded)이 30초 안에 끝나지 않았습니다.'); return; }
-    say('⏳ ' + head + ' — 페이지 로딩 대기 중... <button id="tmgAutoAbort">자동 시작 취소</button>', '#b8860b');
+  autoPanel(head, function(){ abort = true; autoMsg('취소 요청을 받았습니다. 곧 중단합니다…'); });
+
+  var info = '마켓: ' + esc(names(MARKETS, job.markets) || '없음(업데이트만)')
+           + ' / 항목: ' + esc(names(ITEMS, job.items) || '없음(전송만)');
+
+  // ① 페이지 로딩 대기. 플래그를 못 읽으면(null) 이 관문은 건너뛰고 ④가 판정한다.
+  var flag = pageLoadedFlag(), waited = 0;
+  while(pageLoadedFlag() === false){
+    if(abort){ stop(CANCEL_BY_USER); return; }
+    if(waited >= 60000){ stop('더망고 페이지 로딩이 60초 안에 끝나지 않았습니다.'); return; }
+    autoMsg('더망고 페이지 로딩을 기다리는 중… ' + Math.round(waited/1000) + '초');
     await sleep(500); waited += 500;
   }
 
-  // 창별 취소 유예
+  // ② 취소 유예
   for(var i = AUTO_DELAY; i > 0; i--){
-    if(abort){ stop('사용자가 취소했습니다.'); return; }
-    say('⏳ ' + head + ' — <b>' + i + '초 후 자동 시작</b>합니다. '
-      + '<button id="tmgAutoAbort">자동 시작 취소</button>'
-      + '<br>&nbsp;&nbsp;· 마켓: ' + esc(names(MARKETS, job.markets) || '없음(업데이트만)')
-      + ' / 항목: ' + esc(names(ITEMS, job.items) || '없음(전송만)'), '#b8860b');
+    if(abort){ stop(CANCEL_BY_USER); return; }
+    autoMsg('<b>' + i + '초 후 자동 시작</b>합니다. · ' + info
+      + (flag === null ? '<br>&nbsp;&nbsp;<span style="opacity:.9">· 로딩 플래그를 읽을 수 없어 시작 응답으로 판정합니다.</span>' : ''));
     await sleep(1000);
   }
-  if(abort){ stop('사용자가 취소했습니다.'); return; }
+  if(abort){ stop(CANCEL_BY_USER); return; }
 
-  // 클릭 직전 재대조 — 로딩 도중 화면이 바뀌었을 수 있다
+  // ③ 클릭 직전 재대조 — 대기 도중 화면이 바뀌었을 수 있다
   var bad = diff(job, actualState());
   if(bad.length){ stop('클릭 직전 재대조에서 어긋났습니다: ' + bad.join(' / ')); return; }
 
@@ -386,30 +428,41 @@ async function autoStart(job, head){
     stop('범위 분할을 쓰지 않는 프리셋인데 범위 입력 영역이 열려 있습니다.'); return;
   }
 
-  // 클릭 — start_ini_all()의 거부 alert를 잡아 배너로 보여 준다(삼키지 않는다).
   var btn = document.getElementById(startBtnId(job));
   if(!btn){ stop('시작 버튼을 찾지 못했습니다.'); return; }
-  var caught = [], orig = window.alert;
-  window.alert = function(m){ caught.push(String(m)); };
-  try{ btn.click(); }
-  catch(e){ caught.push('클릭 예외: ' + e.message); }
-  finally{ window.alert = orig; }
 
-  // 시작 성공 판정 — 버튼 라벨이 '진행중'으로 바뀌는지 폴링
-  var t = 0;
-  while(t < 8000 && !startedYet()){ await sleep(400); t += 400; }
+  // ④ 클릭. 성공/실패 판정은 더망고 자신에게 맡긴다.
+  //    · 시작 신호가 뜨면 성공
+  //    · '페이지 로딩중' alert면 아직 이르다 → 재시도 (최대 60초)
+  //    · 그 밖의 alert면 사람이 고쳐야 하는 거부다 → 즉시 중단하고 문구를 그대로 보여 준다
+  //    · alert도 없고 시작도 안 됐으면 버튼이 죽은 것이다 → 즉시 중단 (조용히 반복하지 않는다)
+  var deadline = Date.now() + 60000, tries = 0;
+  while(true){
+    if(abort){ stop(CANCEL_BY_USER); return; }
+    tries++;
+    autoMsg('시작을 요청하는 중… (' + tries + '회)');
+    var r = await pressStart(btn);
 
-  if(!startedYet()){
-    stop('시작 신호가 확인되지 않았습니다.'
-      + (caught.length ? ' 더망고 메시지: ' + caught.join(' | ') : ' (더망고 메시지 없음)'));
-    return;
+    if(r.started){
+      banner('▶ ' + head + ' — <b>자동 시작했습니다.</b> (' + tries + '회 시도)'
+        + '<br>&nbsp;&nbsp;· ' + info
+        + '<br>&nbsp;&nbsp;· ⚠ 더망고 설정(auto_repeat)에 의해 <b>완료 후 스스로 재시작</b>합니다. '
+        + '끝나면 창을 닫으세요 — 자동시작이라 방치하면 같은 구간을 무한 반복합니다.', '#1f7a3d');
+      return;
+    }
+    if(!r.alerts){
+      stop('시작 버튼이 아무 반응도 하지 않았습니다(더망고 메시지 없음). 화면 상태를 확인하세요.'); return;
+    }
+    if(r.alerts.indexOf('로딩') < 0){
+      stop('더망고가 시작을 거부했습니다 — ' + r.alerts); return;
+    }
+    if(Date.now() >= deadline){
+      stop('더망고가 60초 동안 계속 "로딩중"이라고 답했습니다 — ' + r.alerts); return;
+    }
+    autoMsg('더망고가 아직 로딩 중이라고 답했습니다. 다시 시도합니다… ('
+      + tries + '회 · 남은 ' + Math.max(0, Math.round((deadline - Date.now())/1000)) + '초)');
+    await sleep(1500);
   }
-  banner('▶ ' + head + ' — <b>자동 시작했습니다.</b>'
-    + (caught.length ? '<br>&nbsp;&nbsp;· ⚠ 더망고 메시지: ' + esc(caught.join(' | ')) : '')
-    + '<br>&nbsp;&nbsp;· 마켓: ' + esc(names(MARKETS, job.markets) || '없음(업데이트만)')
-    + ' / 항목: ' + esc(names(ITEMS, job.items) || '없음(전송만)')
-    + '<br>&nbsp;&nbsp;· ⚠ 더망고 설정(auto_repeat)에 의해 <b>완료 후 스스로 재시작</b>합니다. '
-    + '끝나면 창을 닫으세요 — 자동시작이라 방치하면 같은 구간을 무한 반복합니다.', '#1f7a3d');
 }
 
 function childMode(jid){
