@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         더망고 상품업데이트 런처
 // @namespace    solddeul.tmg
-// @version      1.3.1
-// @description  상품업데이트&마켓전송 화면의 설정(수집사이트/업데이트항목/전송마켓/변동일/범위)을 프리셋으로 저장해 두고, 범위를 구간으로 나눠 여러 창을 한꺼번에 띄운다. 구간마다 전송마켓을 따로 지정할 수 있다. 새로 열린 창은 프리셋과 실제 화면을 대조해 일치할 때만 시작 버튼을 열어 준다. [실행]은 창만 열고 사람이 시작을 누르며, [실행+자동시작]은 확인창 1회를 거쳐 각 창이 대조 통과 후 스스로 시작한다.
+// @version      1.5.1
+// @description  상품업데이트&마켓전송 화면의 설정(수집사이트/업데이트항목/전송마켓/변동일/범위)을 프리셋으로 저장해 두고, 범위를 구간으로 나눠 여러 창을 한꺼번에 띄운다. 구간마다 전송마켓을 따로 지정할 수 있다. 새로 열린 창은 프리셋과 실제 화면을 대조해 일치할 때만 시작 버튼을 열어 준다. [실행]은 창만 열고 사람이 시작을 누르며, [실행+자동시작]은 확인창 1회를 거쳐 각 창이 대조 통과 후 스스로 시작한다. v1.4부터 런처가 연 창에서는 더망고의 auto_repeat(자동 재시작)을 끈다. v1.5부터는 반복이 필요하면 런처가 직접 한다 — 프리셋에 '매일 HH:MM'을 지정하면 완료를 감지해 그 시각에 대조를 다시 하고 시작 버튼을 누른다.
 // @match        https://tmg4682.mycafe24.com/mall/admin/admin_goods_update.php*
 // @run-at       document-idle
 // @grant        none
@@ -37,6 +37,36 @@
 //  · ★ update_btn_change('on')은 attr('onclick','start_ini_all();')로 인라인 핸들러를 되살린다.
 //    → onclick 프로퍼티만 덮어쓰는 잠금은 배치가 끝나면 조용히 풀린다(v1.2의 잠재 버그).
 //      capture 단계 리스너로 잘라야 한다.
+//
+// ── ★★ auto_repeat 실측 (2026-08-02, v1.4의 근거) ───────────
+//  scrapDetailParallel()의 끝은 이렇게 생겼다 (소스 확인함):
+//      if (auto_repeat) {
+//          setTimeout(function(){ … scrapDetailParallel(); }, seconds);   // ①
+//          setTimeout(function(){ auto_restart_ini();      }, seconds);   // ②
+//      } else { … }
+//  그리고  auto_restart_ini() = update_page_load('1'); scrapDetailParallel();
+//  게다가  update_page_load()의 ajax 콜백도 끝에서 scrapDetailParallel()을 무조건 부른다(조건 없음).
+//
+//  ★ 즉 재시작 1회마다 scrap 루프가 1개 → 3개로 늘어난다.
+//    ①에서 1개 · ②가 직접 1개 · ②가 부른 update_page_load 콜백에서 1개.
+//    scrapDetailParallel에는 재진입 가드가 없다(확인함) → 늘어난 3개가 각각 또 완료되면 또 3배.
+//    실제 사고: 4시간이면 끝날 구간이 12시간 뒤에도 안 끝나고 창마다 진도가 뒤죽박죽이었다.
+//
+//  ★ 끄는 방법의 함정: 조건이 auto_repeat=='Y' 비교가 아니라 if(auto_repeat) 진리값이다.
+//    서버는 "Y"를 심어 보내는데 "N"도 truthy라 값만 "N"으로 바꿔서는 안 꺼진다.
+//    → 반드시 빈 문자열('')처럼 falsy 한 값으로 만들어야 한다. killAutoRepeat() 참조.
+//
+//  ★ 2026-08-02 런타임 실측에서는 ②만 걸리고 ①은 걸리지 않았다(①의 조건 미규명, 스크래퍼 팝업
+//    상태로 추정). 그래서 배수는 상황에 따라 2~3배로 본다. 소스 형태만 보고 단정하지 말 것.
+//  ★ 재시작 시각은 '완료 후 0~60분'이 아니다. auto_repeat_type="2" · auto_repeat_time="01"에서
+//    실측 지연은 25,401,022ms(≈7시간 3분) = 다음 01시 + 랜덤. 즉 하루 1회 지정 시각이다.
+//  ★ 반복이 켜져 있으면 완료해도 버튼이 '진행중'으로 굳는다 — update_btn_change('on')이 else 쪽에만
+//    있기 때문이다. 그래서 완료 판정(awaitDone)은 반복을 끈 상태에서만 성립한다.
+//  ★ 'auto_restart_ini만 죽이고 auto_repeat은 살린다'는 안(B안)은 기각됐다 — ②가 유일한 타이머라
+//    재시작이 아예 사라지고, 버튼은 진행중으로 굳은 채 창이 7시간을 기다린다.
+//
+//  런처가 연 창에서는 자동/수동을 가리지 않고 더망고 반복을 끈다.
+//  반복이 필요하면 런처가 직접 한다(v1.5, repeatLoop 참조) — 평소와 같은 시작 경로를 타므로 루프가 1개다.
 // ────────────────────────────────────────────────────────────
 var SITES = [
   {v:'a_rt',               t:'ABCmart.a-rt.com'},
@@ -112,6 +142,7 @@ function blank(){
     markets:[],                  // 구간 기본 마켓
     cmk:{},                      // 구간별 마켓 override { 구간번호: [마켓코드] }
     chd:'',
+    rpt:'',                      // 반복 — '' = 안 함, '0'~'23' = 매일 그 시각
     useRange:true, total:0, first:450, size:500, skip:[]
   };
 }
@@ -206,7 +237,7 @@ function expand(p){
   var base = {
     pid:p.id, name:p.name, site:p.site,
     items:(p.items||[]).slice(),
-    status:STATUS, chd:p.chd||'', order:ORDER
+    status:STATUS, chd:p.chd||'', order:ORDER, rpt:p.rpt||''
   };
   if(!p.useRange){
     var mk = (p.markets||[]).slice();
@@ -371,9 +402,10 @@ async function pressStart(btn){
   try{ btn.click(); }
   catch(e){ caught.push('클릭 예외: ' + e.message); }
   finally{ window.alert = orig; }
-  // update_btn_change('off')는 start_ini_all 안에서 곧바로 불린다 → 짧게 폴링해도 충분하다
+  // start_ini_all은 market_login_check(ajax)를 타므로 update_btn_change('off')가 몇 초 늦을 수 있다.
+  // v1.3의 3초는 짧아서 '실제로는 시작했는데 아무 반응 없음'으로 오판할 여지가 있었다 → 15초로 늘렸다.
   var t = 0;
-  while(t < 3000 && !startedYet()){ await sleep(200); t += 200; }
+  while(t < 15000 && !startedYet()){ await sleep(200); t += 200; }
   return {started: startedYet(), alerts: caught.join(' | ')};
 }
 
@@ -446,8 +478,7 @@ async function autoStart(job, head){
     if(r.started){
       banner('▶ ' + head + ' — <b>자동 시작했습니다.</b> (' + tries + '회 시도)'
         + '<br>&nbsp;&nbsp;· ' + info
-        + '<br>&nbsp;&nbsp;· ⚠ 더망고 설정(auto_repeat)에 의해 <b>완료 후 스스로 재시작</b>합니다. '
-        + '끝나면 창을 닫으세요 — 자동시작이라 방치하면 같은 구간을 무한 반복합니다.', '#1f7a3d');
+        + '<br>&nbsp;&nbsp;· 끝나면 배너가 🏁 완료로 바뀝니다. 반복은 꺼져 있습니다.', '#1f7a3d');
       return;
     }
     if(!r.alerts){
@@ -465,11 +496,166 @@ async function autoStart(job, head){
   }
 }
 
+// ── ★ 더망고 자동 재시작(auto_repeat) 차단 — v1.4 ────────────
+// 근거는 파일 위쪽 '실측' 주석. 재시작 1회마다 scrap 루프가 3배로 늘어난다.
+// 조건이 if(auto_repeat) 진리값이라 "N"으로는 안 꺼진다 → falsy 로 만든다.
+// 값이 안 꺼지는 경우에 대비해 auto_restart_ini 자체도 무력화한다(②만 막고 ①은 못 막는다 —
+// 그래서 값 차단이 주(主)이고 함수 무력화는 보조다).
+function killAutoRepeat(){
+  var r = {before:null, off:false, wrapped:false};
+  try{ r.before = (typeof auto_repeat === 'undefined') ? null : String(auto_repeat); }catch(e){}
+  try{ window.auto_repeat = ''; }catch(e){}
+  try{ r.off = (typeof auto_repeat !== 'undefined') && !auto_repeat; }catch(e){ r.off = false; }
+  try{
+    if(typeof window.auto_restart_ini === 'function'){
+      window.auto_restart_ini = function(){ /* 런처: 자동 재시작을 막았습니다 */ };
+      r.wrapped = true;
+    }
+  }catch(e){}
+  return r;
+}
+
+// 차단 결과를 배너 한 줄로. 실패하면 조용히 넘기지 않고 경고를 남긴다.
+function repText(r){
+  if(r.off) return '🔒 더망고 자동 재시작(auto_repeat)을 껐습니다 — 이 구간을 <b>한 번만</b> 돕니다.';
+  return '⚠ <b>자동 재시작을 끄지 못했습니다</b>(auto_repeat 전역을 찾지 못함'
+       + (r.wrapped ? ', auto_restart_ini만 무력화' : '')
+       + '). 끝나면 창을 <b>반드시 닫으세요</b> — 방치하면 같은 구간이 여러 겹으로 다시 돕니다.';
+}
+
+// ── 완료 감지 ────────────────────────────────────────────────
+// 판정은 시작 판정과 같은 신호(버튼 라벨의 '진행중')를 쓴다 — 진행중이 됐다가 풀리면 완료.
+// ★ 이 판정은 더망고 반복을 껐을 때만 성립한다. 켜져 있으면 완료해도 버튼이 '진행중'으로 굳는다
+//   (update_btn_change('on')이 else 쪽에만 있다 — 2026-08-02 실측). killAutoRepeat()이 전제다.
+async function awaitDone(){
+  while(!startedYet()) await sleep(2000);
+  while(startedYet())  await sleep(5000);
+}
+
+function setTitle(tag){
+  try{
+    var base = document.title.replace(/^\[[^\]]*\]\s*/, '');
+    document.title = tag ? ('[' + tag + '] ' + base) : base;
+  }catch(e){}
+}
+
+function doneBanner(head, info){
+  banner('🏁 ' + head + ' — <b>이 구간이 끝났습니다.</b>'
+    + '<br>&nbsp;&nbsp;· ' + info
+    + '<br>&nbsp;&nbsp;· 런처가 자동 반복을 껐으므로 이 창은 더 이상 아무것도 하지 않습니다. 닫으셔도 됩니다.', '#2e6da4');
+  setTitle('완료');
+}
+
+// ── ★ 반복 실행 — 더망고 기능을 쓰지 않고 런처가 직접 재시작한다 (v1.5) ──
+// 더망고의 auto_repeat은 재시작 경로에서 워커를 2~3갈래로 불러 루프를 겹치게 만든다(파일 위 실측).
+// 그래서 반복은 런처가 맡는다. 완료를 감지해 지정한 시각에 '시작 버튼을 다시 누르는' 방식이라
+// 평소와 똑같은 start_ini_all() 경로를 타고, 루프는 정확히 1개다.
+// 게다가 회차마다 프리셋↔화면 대조를 다시 한다 — 더망고 자체 반복은 이걸 하지 않는다.
+// ★ 다음 시각은 '직전 회차가 끝난 뒤'에만 계산한다.
+//   실행 중에는 타이머가 아예 돌지 않으므로 회차가 겹치거나 밀려 쌓이는 일이 구조적으로 없다.
+//   지정 시각을 넘긴 채 끝났으면 그날은 건너뛰고 다음 날로 간다.
+function nextRunAt(hour, minute){
+  var d = new Date();
+  d.setHours(hour, minute, 0, 0);
+  if(d.getTime() <= Date.now()) d.setDate(d.getDate() + 1);
+  return d;
+}
+function pad2(n){ return (n < 10 ? '0' : '') + n; }
+function clockOf(d){ return pad2(d.getHours()) + ':' + pad2(d.getMinutes()); }
+function leftOf(ms){
+  var s = Math.max(0, Math.round(ms / 1000));
+  return Math.floor(s / 3600) + '시간 ' + Math.floor((s % 3600) / 60) + '분';
+}
+
+async function repeatLoop(job, head, info){
+  var at = parseRpt(job.rpt);
+  if(!at) return;                       // 여기까지 왔는데 못 읽으면 반복하지 않는다
+  var when = rptLabel(job.rpt);
+  var stopped = false, round = 1;
+
+  // 중지 버튼은 배너를 다시 그릴 때마다 새로 만든다. 대신 상태는 바깥 변수 하나로만 본다.
+  var STOP = '<div style="margin-top:6px"><button id="tmgRptStop" '
+    + 'style="font:bold 12px/1.4 \'맑은 고딕\',sans-serif;padding:3px 10px;cursor:pointer">반복 중지</button>'
+    + '<span style="margin-left:8px;opacity:.9">← 중지는 이 버튼으로만 됩니다</span></div>';
+  function bindStop(){
+    var b = document.getElementById('tmgRptStop');
+    if(b) b.addEventListener('click', function(ev){ ev.stopPropagation(); stopped = true; });
+  }
+  function msg(html){ var m = document.getElementById('tmgRptMsg'); if(m) m.innerHTML = html; }
+  function halt(reason, color){
+    banner('⏹ ' + head + ' — <b>반복을 멈췄습니다.</b> (' + round + '회차까지 실행)'
+      + '<br>&nbsp;&nbsp;· ' + esc(reason), color || '#c9302c');
+    setTitle('반복중지');
+  }
+  function bye(){ halt('[반복 중지] 버튼을 눌렀습니다.', '#6c757d'); }
+
+  while(true){
+    var target = nextRunAt(at.h, at.m);
+    setTitle('대기');
+    banner('🔁 <b>' + head + '</b> — ' + round + '회차 완료. <b>' + when + '</b>에 다시 시작합니다.'
+      + '<br>&nbsp;&nbsp;· ' + info
+      + '<br>&nbsp;&nbsp;· <span id="tmgRptMsg">…</span>' + STOP, '#2e6da4');
+    bindStop();
+
+    while(Date.now() < target.getTime()){
+      if(stopped){ bye(); return; }
+      msg('다음 시작 <b>' + clockOf(target) + '</b> · 남은 시간 ' + leftOf(target.getTime() - Date.now()));
+      await sleep(1000);
+    }
+    if(stopped){ bye(); return; }
+
+    // ★ 회차마다 다시 대조한다
+    var bad = diff(job, actualState());
+    if(bad.length){ halt('설정이 프리셋과 달라졌습니다 — ' + bad.join(' / ')); return; }
+    if(job.useRange){
+      var sl = document.getElementById('start_limit'), el = document.getElementById('end_limit');
+      if(!sl || !el || sl.value !== String(job.start) || el.value !== String(job.end)){
+        halt('범위 값이 유지되지 않았습니다 (요청 ' + job.start + '~' + job.end + ').'); return;
+      }
+      if(!rangeUiOpen()){ halt('범위 입력 영역이 닫혀 있습니다. 이대로 시작하면 검색결과 전량이 실행됩니다.'); return; }
+    }else if(rangeUiOpen()){
+      halt('범위를 쓰지 않는 프리셋인데 범위 입력 영역이 열려 있습니다.'); return;
+    }
+    var btn = document.getElementById(startBtnId(job));
+    if(!btn){ halt('시작 버튼을 찾지 못했습니다.'); return; }
+
+    msg('시작을 요청하는 중…');
+    var r = await pressStart(btn);
+    if(!r.started){
+      halt('시작하지 못했습니다 — ' + (r.alerts || '더망고가 아무 메시지도 내지 않았습니다.')); return;
+    }
+
+    round++;
+    setTitle('진행중');
+    banner('▶ ' + head + ' — <b>' + round + '회차를 시작했습니다.</b> (' + when + ' 반복)'
+      + '<br>&nbsp;&nbsp;· ' + info + STOP, '#1f7a3d');
+    bindStop();
+    await awaitDone();
+    if(stopped){ bye(); return; }
+  }
+}
+
+// 1회차 완료를 기다린 뒤, 반복 설정이 있으면 반복으로 넘긴다.
+async function runWatcher(job, head, info){
+  await awaitDone();
+  if(parseRpt(job.rpt)) await repeatLoop(job, head, info);
+  else doneBanner(head, info);
+}
+
 function childMode(jid){
   var raw = localStorage.getItem(KEY_JOB + jid);
   if(!raw){ banner('⚠ 런처 작업 정보를 찾지 못했습니다. 이 창은 수동으로 확인하고 쓰세요.', '#e0a800'); return; }
   var job;
   try{ job = JSON.parse(raw); }catch(e){ banner('⚠ 런처 작업 정보가 깨졌습니다.', '#e0a800'); return; }
+
+  // ★ 자동 재시작부터 끈다 (대조 실패로 중간에 return 하더라도 꺼진 채로 남아야 한다)
+  var rep = killAutoRepeat();
+
+  // ★ auto 는 1회용이다. 이 값을 남겨 두면 창을 새로고침하는 것만으로
+  //   확인창 없이 또 자동 시작한다(#tmglauncher 해시는 리로드를 넘어 살아남는다).
+  if(job.auto){
+    try{ localStorage.setItem(KEY_JOB + jid, JSON.stringify(Object.assign({}, job, {auto:false}))); }catch(e){}
+  }
 
   var bad = diff(job, actualState());
   var rangeErr = job.useRange ? injectRange(job) : null;
@@ -484,7 +670,8 @@ function childMode(jid){
     var lines = bad.concat(rangeErr ? ['범위 — ' + rangeErr] : []);
     banner('⛔ ' + head + ' — <b>설정이 프리셋과 다릅니다. 시작을 잠갔습니다.</b>'
       + (job.auto ? ' (자동 시작도 취소했습니다)' : '') + '<br>'
-      + lines.map(function(x){ return '&nbsp;&nbsp;· ' + esc(x); }).join('<br>'), '#c9302c');
+      + lines.map(function(x){ return '&nbsp;&nbsp;· ' + esc(x); }).join('<br>')
+      + '<br>&nbsp;&nbsp;· ' + repText(rep), '#c9302c');
     return;
   }
 
@@ -493,12 +680,16 @@ function childMode(jid){
     // (실제 실행 범위는 버튼이 아니라 #sp_limit_info 의 display 가 정하지만, 표시를 명확히 하기 위해 유지)
     lockStart('update_start', '런처: 이 창은 구간 ' + job.start + '~' + job.end + ' 전용입니다. 아래 범위설정 시작 버튼을 쓰세요.');
   }
-  banner('✅ ' + head + ' · 준비완료 — <b>' + (job.auto ? '잠시 후 자동으로 시작합니다.' : '아래 시작 버튼을 직접 누르세요.') + '</b>'
-    + '<br>&nbsp;&nbsp;· 마켓: ' + esc(names(MARKETS, job.markets) || '없음(업데이트만)')
-    + ' / 항목: ' + esc(names(ITEMS, job.items) || '없음(전송만)')
-    + '<br>&nbsp;&nbsp;· ' + esc(hintOf(job.items, job.markets))
-    + '<br>&nbsp;&nbsp;· ⚠ 더망고 설정(auto_repeat)에 의해 완료 후 스스로 재시작합니다. 끝나면 창을 닫으세요.', '#1f7a3d');
+  var info = '마켓: ' + esc(names(MARKETS, job.markets) || '없음(업데이트만)')
+           + ' / 항목: ' + esc(names(ITEMS, job.items) || '없음(전송만)');
 
+  banner('✅ ' + head + ' · 준비완료 — <b>' + (job.auto ? '잠시 후 자동으로 시작합니다.' : '아래 시작 버튼을 직접 누르세요.') + '</b>'
+    + '<br>&nbsp;&nbsp;· ' + info
+    + '<br>&nbsp;&nbsp;· ' + esc(hintOf(job.items, job.markets))
+    + '<br>&nbsp;&nbsp;· ' + repText(rep)
+    + (parseRpt(job.rpt) ? '<br>&nbsp;&nbsp;· 🔁 끝나면 <b>' + esc(rptLabel(job.rpt)) + '</b>에 런처가 다시 시작합니다(회차마다 대조 재확인).' : ''), '#1f7a3d');
+
+  runWatcher(job, head, info);
   if(job.auto) autoStart(job, head);
 }
 
@@ -521,6 +712,40 @@ function pageOptions(name, sel, fallback){
 }
 
 function stat(m){ var s = q('#tmgLStat'); if(s) s.innerHTML = m; }
+
+// 반복 시각 UI — 시/분 두 개의 셀렉트. 저장값은 'H:M' 문자열 하나로 둔다.
+// ★ v1.5.0은 시만 저장했다(예 '1'). 그 프리셋도 그대로 읽히게 분이 없으면 0분으로 본다.
+function rptSelects(rpt){
+  var t = parseRpt(rpt), on = !!t;
+  var h = t ? t.h : 1, m = t ? t.m : 0;   // 반복을 켤 때의 기본값 = 01:00
+  function opts(n, sel, suffix){
+    var s = '';
+    for(var i = 0; i < n; i++)
+      s += '<option value="' + i + '"' + (i === sel ? ' selected' : '') + '>' + pad2(i) + suffix + '</option>';
+    return s;
+  }
+  var dis = on ? '' : ' disabled';
+  return '<select id="tmgLRptOn">'
+       +   '<option value=""' + (on ? '' : ' selected') + '>반복 안 함 (1회만)</option>'
+       +   '<option value="1"' + (on ? ' selected' : '') + '>매일</option>'
+       + '</select> '
+       + '<select id="tmgLRptH"' + dis + '>' + opts(24, h, '시') + '</select> '
+       + '<select id="tmgLRptM"' + dis + '>' + opts(60, m, '분') + '</select>';
+}
+
+// 'H:M' → {h,m}. 못 읽으면 null(=반복 안 함)을 준다 — 조용히 0시로 떨어지지 않게.
+function parseRpt(rpt){
+  if(!rpt && rpt !== 0) return null;
+  var p = String(rpt).split(':');
+  var h = parseInt(p[0], 10), m = parseInt(p[1], 10);
+  if(isNaN(h) || h < 0 || h > 23) return null;
+  if(isNaN(m) || m < 0 || m > 59) m = 0;
+  return {h: h, m: m};
+}
+function rptLabel(rpt){
+  var t = parseRpt(rpt);
+  return t ? ('매일 ' + pad2(t.h) + ':' + pad2(t.m)) : '';
+}
 
 function checkRow(list, sel, kind){
   return list.map(function(x){
@@ -595,6 +820,10 @@ function render(){
       + (cur.useRange ? '<div style="color:#888;font-size:11px;margin-top:2px">구간별로 다르게 하려면 아래 구간 목록에서 [마켓 ▾]을 누르세요.</div>' : '')
     + '</fieldset>'
   + '<div style="margin-bottom:6px">변동일 <select id="tmgLChd">' + pageOptions('ps_chd', cur.chd, '<option value="">전체</option>') + '</select></div>'
+  + '<div style="margin-bottom:6px">반복 ' + rptSelects(cur.rpt)
+      + (parseRpt(cur.rpt) ? '<div style="color:#2e6da4;font-size:11px">창이 열려 있는 동안 매일 '
+          + esc(rptLabel(cur.rpt).replace('매일 ','')) + '에 다시 시작합니다.</div>' : '')
+    + '</div>'
   + '<div style="margin-bottom:6px;color:#555">정렬: <b>상품수집 날짜순(과거순)</b> 고정</div>'
   + '<fieldset style="border:1px solid #ddd;padding:4px 6px;margin:0 0 6px"><legend style="font-size:11px">범위 분할</legend>'
       + '<label><input type="checkbox" id="tmgLUse"' + (cur.useRange?' checked':'') + '> 사용</label>'
@@ -625,6 +854,7 @@ function collect(clickedItem){
   cur.name    = q('#tmgLName').value.trim() || '이름없음';
   cur.site    = q('#tmgLSite').value;
   cur.chd     = q('#tmgLChd').value;
+  cur.rpt     = q('#tmgLRptOn').value ? (q('#tmgLRptH').value + ':' + q('#tmgLRptM').value) : '';
   cur.useRange= q('#tmgLUse').checked;
   cur.total   = parseInt(q('#tmgLTotal').value,10) || 0;
   cur.first   = parseInt(q('#tmgLFirst').value,10) || 450;
@@ -671,7 +901,8 @@ function confirmText(jobs){
     '· 업데이트항목 : ' + (names(ITEMS, cur.items) || '없음 (전송만)'),
     '· 전송마켓 : ' + mk,
     '· 변동일 : ' + (chd || '전체'),
-    '· 정렬 : 상품수집 날짜순(과거순)'
+    '· 정렬 : 상품수집 날짜순(과거순)',
+    '· 반복 : ' + (parseRpt(cur.rpt) ? ('★ ' + rptLabel(cur.rpt) + ' — 창을 닫을 때까지 계속 반복합니다') : '없음 (1회만)')
   ];
   if(jobs[0].useRange){
     var cnt = jobs.reduce(function(a,j){ return a + (j.end - j.start + 1); }, 0);
@@ -710,7 +941,7 @@ async function doRun(auto){
 }
 
 function bindMain(){
-  ['tmgLName','tmgLSite','tmgLChd','tmgLUse','tmgLTotal','tmgLFirst','tmgLSize'].forEach(function(id){
+  ['tmgLName','tmgLSite','tmgLChd','tmgLRptOn','tmgLRptH','tmgLRptM','tmgLUse','tmgLTotal','tmgLFirst','tmgLSize'].forEach(function(id){
     var e = q('#' + id); if(e) e.onchange = function(){ collect(); render(); };
   });
   qa('#tmgLBody input[data-kind=item],#tmgLBody input[data-kind=market]').forEach(function(e){
@@ -807,7 +1038,8 @@ function panel(){
     + '<button id="tmgLNew">새로</button> <button id="tmgLDel">삭제</button></div>'
     + '<div id="tmgLBody"></div>'
     + '<div id="tmgLStat" style="margin-top:8px;color:#333;min-height:32px;border-top:1px solid #eee;padding-top:6px">대기중</div>'
-    + '<div style="margin-top:4px;color:#888;font-size:11px">※ 자동시작은 대조를 통과한 창만 시작합니다. 끝난 창은 반드시 닫으세요(auto_repeat).</div>';
+    + '<div style="margin-top:4px;color:#888;font-size:11px">※ 자동시작은 대조를 통과한 창만 시작합니다. '
+    + '런처가 연 창은 더망고의 자동 반복(auto_repeat)을 꺼서 구간을 한 번만 돕니다(v1.4).</div>';
   document.body.appendChild(p);
 
   q('#tmgLPick').onchange = function(){
