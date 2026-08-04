@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         더망고 상품업데이트 런처
 // @namespace    solddeul.tmg
-// @version      1.5.1
-// @description  상품업데이트&마켓전송 화면의 설정(수집사이트/업데이트항목/전송마켓/변동일/범위)을 프리셋으로 저장해 두고, 범위를 구간으로 나눠 여러 창을 한꺼번에 띄운다. 구간마다 전송마켓을 따로 지정할 수 있다. 새로 열린 창은 프리셋과 실제 화면을 대조해 일치할 때만 시작 버튼을 열어 준다. [실행]은 창만 열고 사람이 시작을 누르며, [실행+자동시작]은 확인창 1회를 거쳐 각 창이 대조 통과 후 스스로 시작한다. v1.4부터 런처가 연 창에서는 더망고의 auto_repeat(자동 재시작)을 끈다. v1.5부터는 반복이 필요하면 런처가 직접 한다 — 프리셋에 '매일 HH:MM'을 지정하면 완료를 감지해 그 시각에 대조를 다시 하고 시작 버튼을 누른다.
+// @version      1.6.0
+// @description  상품업데이트&마켓전송 화면의 설정(수집사이트/업데이트항목/전송마켓/변동일/범위)을 프리셋으로 저장해 두고, 범위를 구간으로 나눠 여러 창을 한꺼번에 띄운다. v1.6부터 구간은 최대 5개다(동시 5창 한도) — 1~4구간은 지정한 크기대로 끊고 5번째가 남은 전량을 맡는다. 구간마다 전송마켓을 따로 지정할 수 있다. 새로 열린 창은 프리셋과 실제 화면을 대조해 일치할 때만 시작 버튼을 열어 준다. [실행]은 창만 열고 사람이 시작을 누르며, [실행+자동시작]은 확인창 1회를 거쳐 각 창이 대조 통과 후 스스로 시작한다. v1.4부터 런처가 연 창에서는 더망고의 auto_repeat(자동 재시작)을 끈다. v1.5부터는 반복이 필요하면 런처가 직접 한다 — 프리셋에 '매일 HH:MM'을 지정하면 완료를 감지해 그 시각에 대조를 다시 하고 시작 버튼을 누른다.
 // @match        https://tmg4682.mycafe24.com/mall/admin/admin_goods_update.php*
 // @run-at       document-idle
 // @grant        none
@@ -160,7 +160,13 @@ function normalizeItems(list, justClicked){
 
 // ────────────────────────────────────────────────────────────
 // 구간 분할 — 첫 구간 450, 이후 500 (둘 다 프리셋에서 변경 가능)
+// ★ 구간 수를 MAX_CHUNKS(5)로 제한한다 — 사이트당 동시 5창이 한도이기 때문이다(강의 3-24).
+//   1~4구간은 first/size 그대로 끊고, 5번째 구간이 남은 전량을 흡수한다.
+//   예) 총 9,159 · 450/500 → 1~450 / 451~950 / 951~1450 / 1451~1950 / 1951~9159
+//   → 마지막 구간이 가장 커진다. 이건 의도한 동작이다(창 수 상한이 우선).
+//   총건수가 작아 4구간 안에 끝나면 5번째 구간은 생기지 않는다.
 // ────────────────────────────────────────────────────────────
+var MAX_CHUNKS = 5;
 function chunks(p){
   var total = parseInt(p.total,10) || 0;
   var first = parseInt(p.first,10) || 450;
@@ -168,8 +174,9 @@ function chunks(p){
   var out = [], s = 1;
   if(total <= 0 || first <= 0 || size <= 0) return out;
   while(s <= total){
+    var isLast = (out.length === MAX_CHUNKS - 1);   // 마지막 구간은 끝까지 이어 붙인다
     var len = out.length === 0 ? first : size;
-    var e = Math.min(s + len - 1, total);
+    var e = isLast ? total : Math.min(s + len - 1, total);
     out.push({no: out.length + 1, start: s, end: e});
     s = e + 1;
   }
@@ -831,6 +838,8 @@ function render(){
       + '<div style="margin-top:4px">총 <input id="tmgLTotal" type="number" value="' + (cur.total||0) + '" style="width:70px">건'
       + ' · 첫 <input id="tmgLFirst" type="number" value="' + (cur.first||450) + '" style="width:52px">'
       + ' · 이후 <input id="tmgLSize" type="number" value="' + (cur.size||500) + '" style="width:52px"></div>'
+      + '<div style="color:#888;font-size:11px;margin-top:2px">구간은 <b>최대 ' + MAX_CHUNKS + '개</b>입니다(동시 ' + MAX_CHUNKS
+      + '창 한도). 마지막 구간이 남은 전량을 맡으므로 가장 커집니다.</div>'
       + '<div id="tmgLChunks" style="max-height:220px;overflow:auto;margin-top:4px;border-top:1px solid #eee;padding-top:4px">'
       + (cur.useRange ? chunkList(cur) : '<div style="color:#888">범위 분할을 사용하지 않습니다.</div>') + '</div>'
     + '</fieldset>'
