@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         더망고 상품업데이트 런처
 // @namespace    solddeul.tmg
-// @version      1.7.0
+// @version      1.8.0
 // @description  상품업데이트&마켓전송 화면의 설정(수집사이트/업데이트항목/전송마켓/변동일/범위)을 프리셋으로 저장해 두고, 범위를 구간으로 나눠 여러 창을 한꺼번에 띄운다. v1.6부터 구간은 최대 5개다(동시 5창 한도) — 1~4구간은 지정한 크기대로 끊고 5번째가 남은 전량을 맡는다. v1.7에 [실행+예약]을 추가했다 — 창을 미리 열어 두고 프리셋의 '예약' 시각이 되면 대조를 다시 한 뒤 스스로 시작한다. 구간마다 전송마켓을 따로 지정할 수 있다. 새로 열린 창은 프리셋과 실제 화면을 대조해 일치할 때만 시작 버튼을 열어 준다. [실행]은 창만 열고 사람이 시작을 누르며, [실행+자동시작]은 확인창 1회를 거쳐 각 창이 대조 통과 후 스스로 시작한다. v1.4부터 런처가 연 창에서는 더망고의 auto_repeat(자동 재시작)을 끈다. v1.5부터는 반복이 필요하면 런처가 직접 한다 — 프리셋에 '매일 HH:MM'을 지정하면 완료를 감지해 그 시각에 대조를 다시 하고 시작 버튼을 누른다.
 // @match        https://tmg4682.mycafe24.com/mall/admin/admin_goods_update.php*
 // @run-at       document-idle
@@ -578,6 +578,34 @@ function leftOf(ms){
   return Math.floor(s / 60) + '분 ' + (s % 60) + '초';
 }
 
+// ── ★ 대기 루프 계측 · 지각 판정 (v1.8, 2026-08-05) ──
+// 배경: Modern Standby 기기에서 화면을 끄면 창의 JS가 통째로 멈춰, 예약이 '지정 시각'이 아니라
+//   '화면을 켠 시각'에 시작되는 사고가 있었다(CLAUDE.md 6-1장).
+//   ★ 대기 산식에는 버그가 없었다 — `while(Date.now() < target)`은 벽시계라 틱이 늦어도 자기 보정된다.
+//     루프가 '아예 한 번도 돌지 않은' 것이라 고칠 산식이 없었다. 그래서 두 가지를 덧댄다.
+//   ① 틱 계측 — 실제로 몇 초마다 도는지 배너에 드러낸다(억제를 추측이 아니라 관측으로).
+//   ② 지각 유예 — 예정 시각을 크게 넘겨 깨어났으면 시작하지 않는다(조용한 오작동 방지).
+var GRACE_MS = 30 * 60 * 1000;    // 이만큼 넘게 늦으면 시작하지 않는다
+
+function tickMeter(){
+  var last = Date.now();
+  return { tick: function(){ var d = Date.now() - last; last = Date.now(); return d; } };
+}
+// 정상은 1초. 크롬 백그라운드 스로틀링은 60초 근처, 저전력 진입은 그보다 훨씬 크게 벌어진다.
+function tickNote(d){
+  if(!d || d < 3000) return '';
+  return '<br>&nbsp;&nbsp;<b>⚠ 최근 틱 ' + Math.round(d / 1000) + '초 — 이 창이 억제되고 있습니다. '
+       + '화면을 껐다면 켜 두고 밝기만 낮추세요(CLAUDE.md 6-1).</b>';
+}
+// 예정 시각을 유예 이상 지나 깨어났으면 사유 문자열, 아니면 null.
+function lateCheck(target){
+  var late = Date.now() - target.getTime();
+  if(late <= GRACE_MS) return null;
+  return '예정 시각 ' + clockOf(target) + '을(를) ' + leftOf(late) + ' 지나서야 깨어났습니다 — '
+       + '대기 중에 이 창이 멈춰 있었다는 뜻입니다(CLAUDE.md 6-1장). '
+       + '유예 ' + Math.round(GRACE_MS / 60000) + '분을 넘겨 <b>시작하지 않았습니다.</b>';
+}
+
 // ── 대조 → 범위 확인 → 시작 클릭 (반복 회차·예약 시작 공용) ──
 // 실패하면 사유 문자열을, 성공하면 null을 돌려준다.
 // ★ 자동시작(autoStart)은 '로딩중' alert 재시도 루프가 따로 있어 이 함수를 쓰지 않는다.
@@ -634,6 +662,7 @@ async function scheduleStart(job, head, info){
 
   function msg(html){ var m = document.getElementById('tmgSchMsg'); if(m) m.innerHTML = html; }
 
+  var meter = tickMeter(), lastTick = 0;
   while(Date.now() < target.getTime()){
     if(cancelled){ bye('[예약 취소] 버튼을 눌렀습니다.', '#6c757d'); return; }
     // ★ 사람이 먼저 시작했으면 예약은 물러난다. 그대로 두면 예약 시각에 또 누르게 된다.
@@ -644,16 +673,26 @@ async function scheduleStart(job, head, info){
       return;
     }
     msg('시작 예정 <b>' + clockOf(target) + '</b> · 남은 시간 ' + leftOf(target.getTime() - Date.now())
-      + '<br>&nbsp;&nbsp;<span style="opacity:.9">· 이 창을 닫거나 PC가 절전에 들어가면 예약도 사라집니다.</span>');
+      + '<br>&nbsp;&nbsp;<span style="opacity:.9">· 창을 닫거나 <b>화면을 끄면</b> 예약이 멈춥니다 — '
+      + '이 PC는 화면 끄기가 곧 저전력 진입이다. <b>밝기만 최저로</b> 낮출 것.</span>'
+      + tickNote(lastTick));
     await sleep(1000);
+    lastTick = meter.tick();
   }
   if(cancelled){ bye('[예약 취소] 버튼을 눌렀습니다.', '#6c757d'); return; }
+
+  // ★ 지각 판정(v1.8) — 유예를 넘겨 깨어났으면 시작하지 않는다.
+  //   그냥 시작하면 '엉뚱한 시각에 조용히 도는' 상태가 된다(실제로 겪었다).
+  var lateWhy = lateCheck(target);
+  if(lateWhy){ bye(lateWhy); return; }
+  var lateMs = Date.now() - target.getTime();
 
   msg('예약 시각이 됐습니다. 대조 후 시작을 요청하는 중…');
   var err = await verifyAndStart(job);
   if(err){ bye('예약 시각이 됐지만 시작하지 못했습니다 — ' + err); return; }
 
   banner('▶ ' + head + ' — <b>예약 시각(' + clockOf(target) + ')에 시작했습니다.</b>'
+    + (lateMs > 60000 ? ' <b style="color:#ffd">(예정보다 ' + leftOf(lateMs) + ' 늦음)</b>' : '')
     + '<br>&nbsp;&nbsp;· ' + info
     + '<br>&nbsp;&nbsp;· ' + (parseRpt(job.rpt)
         ? '🔁 끝나면 <b>' + esc(rptLabel(job.rpt)) + '</b>에 다시 시작합니다.'
@@ -691,12 +730,20 @@ async function repeatLoop(job, head, info){
       + '<br>&nbsp;&nbsp;· <span id="tmgRptMsg">…</span>' + STOP, '#2e6da4');
     bindStop();
 
+    var meter = tickMeter(), lastTick = 0;
     while(Date.now() < target.getTime()){
       if(stopped){ bye(); return; }
-      msg('다음 시작 <b>' + clockOf(target) + '</b> · 남은 시간 ' + leftOf(target.getTime() - Date.now()));
+      msg('다음 시작 <b>' + clockOf(target) + '</b> · 남은 시간 ' + leftOf(target.getTime() - Date.now())
+        + tickNote(lastTick));
       await sleep(1000);
+      lastTick = meter.tick();
     }
     if(stopped){ bye(); return; }
+
+    // ★ 지각 판정(v1.8) — 반복은 회차 사이 대기가 가장 길어 노출이 크다.
+    //   유예를 넘겼으면 조용히 엉뚱한 시각에 돌지 말고 멈춘다.
+    var lateWhy = lateCheck(target);
+    if(lateWhy){ halt(lateWhy); return; }
 
     // ★ 회차마다 다시 대조한다 (예약 시작과 같은 절차 — verifyAndStart)
     msg('시작을 요청하는 중…');
