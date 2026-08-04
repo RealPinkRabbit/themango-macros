@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         더망고 상품업데이트 런처
 // @namespace    solddeul.tmg
-// @version      1.6.0
-// @description  상품업데이트&마켓전송 화면의 설정(수집사이트/업데이트항목/전송마켓/변동일/범위)을 프리셋으로 저장해 두고, 범위를 구간으로 나눠 여러 창을 한꺼번에 띄운다. v1.6부터 구간은 최대 5개다(동시 5창 한도) — 1~4구간은 지정한 크기대로 끊고 5번째가 남은 전량을 맡는다. 구간마다 전송마켓을 따로 지정할 수 있다. 새로 열린 창은 프리셋과 실제 화면을 대조해 일치할 때만 시작 버튼을 열어 준다. [실행]은 창만 열고 사람이 시작을 누르며, [실행+자동시작]은 확인창 1회를 거쳐 각 창이 대조 통과 후 스스로 시작한다. v1.4부터 런처가 연 창에서는 더망고의 auto_repeat(자동 재시작)을 끈다. v1.5부터는 반복이 필요하면 런처가 직접 한다 — 프리셋에 '매일 HH:MM'을 지정하면 완료를 감지해 그 시각에 대조를 다시 하고 시작 버튼을 누른다.
+// @version      1.7.0
+// @description  상품업데이트&마켓전송 화면의 설정(수집사이트/업데이트항목/전송마켓/변동일/범위)을 프리셋으로 저장해 두고, 범위를 구간으로 나눠 여러 창을 한꺼번에 띄운다. v1.6부터 구간은 최대 5개다(동시 5창 한도) — 1~4구간은 지정한 크기대로 끊고 5번째가 남은 전량을 맡는다. v1.7에 [실행+예약]을 추가했다 — 창을 미리 열어 두고 프리셋의 '예약' 시각이 되면 대조를 다시 한 뒤 스스로 시작한다. 구간마다 전송마켓을 따로 지정할 수 있다. 새로 열린 창은 프리셋과 실제 화면을 대조해 일치할 때만 시작 버튼을 열어 준다. [실행]은 창만 열고 사람이 시작을 누르며, [실행+자동시작]은 확인창 1회를 거쳐 각 창이 대조 통과 후 스스로 시작한다. v1.4부터 런처가 연 창에서는 더망고의 auto_repeat(자동 재시작)을 끈다. v1.5부터는 반복이 필요하면 런처가 직접 한다 — 프리셋에 '매일 HH:MM'을 지정하면 완료를 감지해 그 시각에 대조를 다시 하고 시작 버튼을 누른다.
 // @match        https://tmg4682.mycafe24.com/mall/admin/admin_goods_update.php*
 // @run-at       document-idle
 // @grant        none
@@ -142,7 +142,8 @@ function blank(){
     markets:[],                  // 구간 기본 마켓
     cmk:{},                      // 구간별 마켓 override { 구간번호: [마켓코드] }
     chd:'',
-    rpt:'',                      // 반복 — '' = 안 함, '0'~'23' = 매일 그 시각
+    rpt:'',                      // 반복 — '' = 안 함, 'H:M' = 매일 그 시각
+    sch:'',                      // 예약 — '' = 바로 시작, 'H:M' = 그 시각에 1회차 시작 (v1.7)
     useRange:true, total:0, first:450, size:500, skip:[]
   };
 }
@@ -244,7 +245,7 @@ function expand(p){
   var base = {
     pid:p.id, name:p.name, site:p.site,
     items:(p.items||[]).slice(),
-    status:STATUS, chd:p.chd||'', order:ORDER, rpt:p.rpt||''
+    status:STATUS, chd:p.chd||'', order:ORDER, rpt:p.rpt||'', sch:p.sch||''
   };
   if(!p.useRange){
     var mk = (p.markets||[]).slice();
@@ -569,9 +570,95 @@ function nextRunAt(hour, minute){
 }
 function pad2(n){ return (n < 10 ? '0' : '') + n; }
 function clockOf(d){ return pad2(d.getHours()) + ':' + pad2(d.getMinutes()); }
+// ★ 1시간 미만이면 분·초로 보여 준다. 예약 카운트다운의 마지막 1분이 '0시간 0분'으로
+//   굳어 버리면 멈춘 것처럼 보인다(반복 대기 배너에도 같이 적용된다).
 function leftOf(ms){
   var s = Math.max(0, Math.round(ms / 1000));
-  return Math.floor(s / 3600) + '시간 ' + Math.floor((s % 3600) / 60) + '분';
+  if(s >= 3600) return Math.floor(s / 3600) + '시간 ' + Math.floor((s % 3600) / 60) + '분';
+  return Math.floor(s / 60) + '분 ' + (s % 60) + '초';
+}
+
+// ── 대조 → 범위 확인 → 시작 클릭 (반복 회차·예약 시작 공용) ──
+// 실패하면 사유 문자열을, 성공하면 null을 돌려준다.
+// ★ 자동시작(autoStart)은 '로딩중' alert 재시도 루프가 따로 있어 이 함수를 쓰지 않는다.
+//   반복·예약은 이미 페이지가 한참 전에 로딩을 마친 상태라 재시도가 필요 없다.
+async function verifyAndStart(job){
+  var bad = diff(job, actualState());
+  if(bad.length) return '설정이 프리셋과 달라졌습니다 — ' + bad.join(' / ');
+  if(job.useRange){
+    var sl = document.getElementById('start_limit'), el = document.getElementById('end_limit');
+    if(!sl || !el || sl.value !== String(job.start) || el.value !== String(job.end))
+      return '범위 값이 유지되지 않았습니다 (요청 ' + job.start + '~' + job.end + ').';
+    // ★ 이 검사를 빼면 범위 UI가 닫힌 채 시작돼 검색결과 전량이 돈다
+    if(!rangeUiOpen()) return '범위 입력 영역이 닫혀 있습니다. 이대로 시작하면 검색결과 전량이 실행됩니다.';
+  }else if(rangeUiOpen()){
+    return '범위를 쓰지 않는 프리셋인데 범위 입력 영역이 열려 있습니다.';
+  }
+  var btn = document.getElementById(startBtnId(job));
+  if(!btn) return '시작 버튼을 찾지 못했습니다.';
+  var r = await pressStart(btn);
+  if(!r.started) return '시작하지 못했습니다 — ' + (r.alerts || '더망고가 아무 메시지도 내지 않았습니다.');
+  return null;
+}
+
+// ── ★ 예약 실행 — 지정한 시각까지 기다렸다가 시작한다 (v1.7) ──
+// 자동시작(5초 뒤 시작)과 같은 계열이지만 대기가 길다. 그래서 다르게 두는 것이 셋 있다.
+//  ① 대기 중에 사람이 시작 버튼을 직접 누르면 예약은 조용히 물러난다(이중 시작 방지).
+//     시작 버튼을 잠그지 않는 이유이기도 하다 — '지금 바로 시작'을 막을 이유가 없다.
+//  ② 시작 직전에 대조를 다시 한다(반복 회차와 같은 verifyAndStart).
+//  ③ 예약 시각이 이미 지났으면 다음 날로 넘긴다(nextRunAt).
+// ★ 대기는 창이 열려 있는 동안만 유효하다. 창을 닫거나 PC가 절전에 들어가면 예약도 사라진다.
+async function scheduleStart(job, head, info){
+  var at = parseRpt(job.sch);
+  if(!at){ banner('⚠ ' + head + ' — 예약 시각을 읽지 못했습니다. 시작 버튼을 직접 누르세요.', '#e0a800'); return; }
+  var target = nextRunAt(at.h, at.m);
+  var cancelled = false;
+
+  function bye(reason, color){
+    banner('⛔ ' + head + ' — <b>예약을 실행하지 않았습니다.</b>'
+      + '<br>&nbsp;&nbsp;· ' + esc(reason)
+      + '<br>&nbsp;&nbsp;· 확인한 뒤 <b>시작 버튼을 직접</b> 누르세요.', color || '#c9302c');
+    setTitle('예약취소');
+  }
+
+  banner('⏰ <b>' + head + '</b> — <b>' + clockOf(target) + '</b>에 자동으로 시작합니다.'
+    + '<br>&nbsp;&nbsp;· ' + info
+    + '<br>&nbsp;&nbsp;· <span id="tmgSchMsg">…</span>'
+    + '<div style="margin-top:6px"><button id="tmgSchStop" '
+    + 'style="font:bold 12px/1.4 \'맑은 고딕\',sans-serif;padding:3px 10px;cursor:pointer">예약 취소</button>'
+    + '<span style="margin-left:8px;opacity:.9">← 예약을 무르는 버튼입니다. '
+    + '지금 바로 돌리려면 그냥 <b>시작 버튼</b>을 누르세요 — 예약은 알아서 물러납니다.</span></div>', '#b8860b');
+  var sb = document.getElementById('tmgSchStop');
+  if(sb) sb.addEventListener('click', function(ev){ ev.stopPropagation(); cancelled = true; });
+  setTitle('예약');
+
+  function msg(html){ var m = document.getElementById('tmgSchMsg'); if(m) m.innerHTML = html; }
+
+  while(Date.now() < target.getTime()){
+    if(cancelled){ bye('[예약 취소] 버튼을 눌렀습니다.', '#6c757d'); return; }
+    // ★ 사람이 먼저 시작했으면 예약은 물러난다. 그대로 두면 예약 시각에 또 누르게 된다.
+    if(startedYet()){
+      banner('▶ ' + head + ' — 예약 시각 전에 <b>이미 시작된 것을 확인했습니다. 예약은 취소합니다.</b>'
+        + '<br>&nbsp;&nbsp;· ' + info, '#1f7a3d');
+      setTitle('진행중');
+      return;
+    }
+    msg('시작 예정 <b>' + clockOf(target) + '</b> · 남은 시간 ' + leftOf(target.getTime() - Date.now())
+      + '<br>&nbsp;&nbsp;<span style="opacity:.9">· 이 창을 닫거나 PC가 절전에 들어가면 예약도 사라집니다.</span>');
+    await sleep(1000);
+  }
+  if(cancelled){ bye('[예약 취소] 버튼을 눌렀습니다.', '#6c757d'); return; }
+
+  msg('예약 시각이 됐습니다. 대조 후 시작을 요청하는 중…');
+  var err = await verifyAndStart(job);
+  if(err){ bye('예약 시각이 됐지만 시작하지 못했습니다 — ' + err); return; }
+
+  banner('▶ ' + head + ' — <b>예약 시각(' + clockOf(target) + ')에 시작했습니다.</b>'
+    + '<br>&nbsp;&nbsp;· ' + info
+    + '<br>&nbsp;&nbsp;· ' + (parseRpt(job.rpt)
+        ? '🔁 끝나면 <b>' + esc(rptLabel(job.rpt)) + '</b>에 다시 시작합니다.'
+        : '끝나면 배너가 🏁 완료로 바뀝니다. 반복은 꺼져 있습니다.'), '#1f7a3d');
+  setTitle('진행중');
 }
 
 async function repeatLoop(job, head, info){
@@ -611,26 +698,10 @@ async function repeatLoop(job, head, info){
     }
     if(stopped){ bye(); return; }
 
-    // ★ 회차마다 다시 대조한다
-    var bad = diff(job, actualState());
-    if(bad.length){ halt('설정이 프리셋과 달라졌습니다 — ' + bad.join(' / ')); return; }
-    if(job.useRange){
-      var sl = document.getElementById('start_limit'), el = document.getElementById('end_limit');
-      if(!sl || !el || sl.value !== String(job.start) || el.value !== String(job.end)){
-        halt('범위 값이 유지되지 않았습니다 (요청 ' + job.start + '~' + job.end + ').'); return;
-      }
-      if(!rangeUiOpen()){ halt('범위 입력 영역이 닫혀 있습니다. 이대로 시작하면 검색결과 전량이 실행됩니다.'); return; }
-    }else if(rangeUiOpen()){
-      halt('범위를 쓰지 않는 프리셋인데 범위 입력 영역이 열려 있습니다.'); return;
-    }
-    var btn = document.getElementById(startBtnId(job));
-    if(!btn){ halt('시작 버튼을 찾지 못했습니다.'); return; }
-
+    // ★ 회차마다 다시 대조한다 (예약 시작과 같은 절차 — verifyAndStart)
     msg('시작을 요청하는 중…');
-    var r = await pressStart(btn);
-    if(!r.started){
-      halt('시작하지 못했습니다 — ' + (r.alerts || '더망고가 아무 메시지도 내지 않았습니다.')); return;
-    }
+    var err = await verifyAndStart(job);
+    if(err){ halt(err); return; }
 
     round++;
     setTitle('진행중');
@@ -658,10 +729,10 @@ function childMode(jid){
   // ★ 자동 재시작부터 끈다 (대조 실패로 중간에 return 하더라도 꺼진 채로 남아야 한다)
   var rep = killAutoRepeat();
 
-  // ★ auto 는 1회용이다. 이 값을 남겨 두면 창을 새로고침하는 것만으로
-  //   확인창 없이 또 자동 시작한다(#tmglauncher 해시는 리로드를 넘어 살아남는다).
-  if(job.auto){
-    try{ localStorage.setItem(KEY_JOB + jid, JSON.stringify(Object.assign({}, job, {auto:false}))); }catch(e){}
+  // ★ auto/sched 는 1회용이다. 이 값을 남겨 두면 창을 새로고침하는 것만으로
+  //   확인창 없이 또 자동 시작·예약한다(#tmglauncher 해시는 리로드를 넘어 살아남는다).
+  if(job.auto || job.sched){
+    try{ localStorage.setItem(KEY_JOB + jid, JSON.stringify(Object.assign({}, job, {auto:false, sched:false}))); }catch(e){}
   }
 
   var bad = diff(job, actualState());
@@ -676,7 +747,7 @@ function childMode(jid){
     lockStart('update_start_limit', msg);
     var lines = bad.concat(rangeErr ? ['범위 — ' + rangeErr] : []);
     banner('⛔ ' + head + ' — <b>설정이 프리셋과 다릅니다. 시작을 잠갔습니다.</b>'
-      + (job.auto ? ' (자동 시작도 취소했습니다)' : '') + '<br>'
+      + (job.auto ? ' (자동 시작도 취소했습니다)' : job.sched ? ' (예약도 취소했습니다)' : '') + '<br>'
       + lines.map(function(x){ return '&nbsp;&nbsp;· ' + esc(x); }).join('<br>')
       + '<br>&nbsp;&nbsp;· ' + repText(rep), '#c9302c');
     return;
@@ -690,7 +761,11 @@ function childMode(jid){
   var info = '마켓: ' + esc(names(MARKETS, job.markets) || '없음(업데이트만)')
            + ' / 항목: ' + esc(names(ITEMS, job.items) || '없음(전송만)');
 
-  banner('✅ ' + head + ' · 준비완료 — <b>' + (job.auto ? '잠시 후 자동으로 시작합니다.' : '아래 시작 버튼을 직접 누르세요.') + '</b>'
+  var startMsg = job.auto  ? '잠시 후 자동으로 시작합니다.'
+               : job.sched ? ('예약 시각 <b>' + esc(hhmm(job.sch)) + '</b>에 자동으로 시작합니다.')
+               :             '아래 시작 버튼을 직접 누르세요.';
+
+  banner('✅ ' + head + ' · 준비완료 — <b>' + startMsg + '</b>'
     + '<br>&nbsp;&nbsp;· ' + info
     + '<br>&nbsp;&nbsp;· ' + esc(hintOf(job.items, job.markets))
     + '<br>&nbsp;&nbsp;· ' + repText(rep)
@@ -698,6 +773,7 @@ function childMode(jid){
 
   runWatcher(job, head, info);
   if(job.auto) autoStart(job, head);
+  else if(job.sched) scheduleStart(job, head, info);
 }
 
 // ────────────────────────────────────────────────────────────
@@ -720,11 +796,12 @@ function pageOptions(name, sel, fallback){
 
 function stat(m){ var s = q('#tmgLStat'); if(s) s.innerHTML = m; }
 
-// 반복 시각 UI — 시/분 두 개의 셀렉트. 저장값은 'H:M' 문자열 하나로 둔다.
+// 시각 선택 UI — 시/분 두 개의 셀렉트. 저장값은 'H:M' 문자열 하나로 둔다.
+// ★ 반복(rpt)과 예약(sch)이 같은 형식·같은 파서를 쓴다. pfx로 id만 갈라 준다('Rpt' / 'Sch').
 // ★ v1.5.0은 시만 저장했다(예 '1'). 그 프리셋도 그대로 읽히게 분이 없으면 0분으로 본다.
-function rptSelects(rpt){
-  var t = parseRpt(rpt), on = !!t;
-  var h = t ? t.h : 1, m = t ? t.m : 0;   // 반복을 켤 때의 기본값 = 01:00
+function timeSelects(pfx, val, offLabel, onLabel){
+  var t = parseRpt(val), on = !!t;
+  var h = t ? t.h : 1, m = t ? t.m : 0;   // 켤 때의 기본값 = 01:00
   function opts(n, sel, suffix){
     var s = '';
     for(var i = 0; i < n; i++)
@@ -732,15 +809,16 @@ function rptSelects(rpt){
     return s;
   }
   var dis = on ? '' : ' disabled';
-  return '<select id="tmgLRptOn">'
-       +   '<option value=""' + (on ? '' : ' selected') + '>반복 안 함 (1회만)</option>'
-       +   '<option value="1"' + (on ? ' selected' : '') + '>매일</option>'
+  return '<select id="tmgL' + pfx + 'On">'
+       +   '<option value=""' + (on ? '' : ' selected') + '>' + offLabel + '</option>'
+       +   '<option value="1"' + (on ? ' selected' : '') + '>' + onLabel + '</option>'
        + '</select> '
-       + '<select id="tmgLRptH"' + dis + '>' + opts(24, h, '시') + '</select> '
-       + '<select id="tmgLRptM"' + dis + '>' + opts(60, m, '분') + '</select>';
+       + '<select id="tmgL' + pfx + 'H"' + dis + '>' + opts(24, h, '시') + '</select> '
+       + '<select id="tmgL' + pfx + 'M"' + dis + '>' + opts(60, m, '분') + '</select>';
 }
 
-// 'H:M' → {h,m}. 못 읽으면 null(=반복 안 함)을 준다 — 조용히 0시로 떨어지지 않게.
+// 'H:M' → {h,m}. 못 읽으면 null(=안 함)을 준다 — 조용히 0시로 떨어지지 않게.
+// 반복·예약 공용.
 function parseRpt(rpt){
   if(!rpt && rpt !== 0) return null;
   var p = String(rpt).split(':');
@@ -749,10 +827,8 @@ function parseRpt(rpt){
   if(isNaN(m) || m < 0 || m > 59) m = 0;
   return {h: h, m: m};
 }
-function rptLabel(rpt){
-  var t = parseRpt(rpt);
-  return t ? ('매일 ' + pad2(t.h) + ':' + pad2(t.m)) : '';
-}
+function hhmm(v){ var t = parseRpt(v); return t ? (pad2(t.h) + ':' + pad2(t.m)) : ''; }
+function rptLabel(rpt){ var s = hhmm(rpt); return s ? ('매일 ' + s) : ''; }
 
 function checkRow(list, sel, kind){
   return list.map(function(x){
@@ -827,9 +903,13 @@ function render(){
       + (cur.useRange ? '<div style="color:#888;font-size:11px;margin-top:2px">구간별로 다르게 하려면 아래 구간 목록에서 [마켓 ▾]을 누르세요.</div>' : '')
     + '</fieldset>'
   + '<div style="margin-bottom:6px">변동일 <select id="tmgLChd">' + pageOptions('ps_chd', cur.chd, '<option value="">전체</option>') + '</select></div>'
-  + '<div style="margin-bottom:6px">반복 ' + rptSelects(cur.rpt)
+  + '<div style="margin-bottom:6px">예약 ' + timeSelects('Sch', cur.sch, '예약 안 함 (바로 시작)', '지정 시각에 시작')
+      + (parseRpt(cur.sch) ? '<div style="color:#b8860b;font-size:11px">[실행+예약]으로 열면 창이 <b>'
+          + esc(hhmm(cur.sch)) + '</b>까지 기다렸다가 스스로 시작합니다.</div>' : '')
+    + '</div>'
+  + '<div style="margin-bottom:6px">반복 ' + timeSelects('Rpt', cur.rpt, '반복 안 함 (1회만)', '매일')
       + (parseRpt(cur.rpt) ? '<div style="color:#2e6da4;font-size:11px">창이 열려 있는 동안 매일 '
-          + esc(rptLabel(cur.rpt).replace('매일 ','')) + '에 다시 시작합니다.</div>' : '')
+          + esc(hhmm(cur.rpt)) + '에 다시 시작합니다.</div>' : '')
     + '</div>'
   + '<div style="margin-bottom:6px;color:#555">정렬: <b>상품수집 날짜순(과거순)</b> 고정</div>'
   + '<fieldset style="border:1px solid #ddd;padding:4px 6px;margin:0 0 6px"><legend style="font-size:11px">범위 분할</legend>'
@@ -843,12 +923,15 @@ function render(){
       + '<div id="tmgLChunks" style="max-height:220px;overflow:auto;margin-top:4px;border-top:1px solid #eee;padding-top:4px">'
       + (cur.useRange ? chunkList(cur) : '<div style="color:#888">범위 분할을 사용하지 않습니다.</div>') + '</div>'
     + '</fieldset>'
-  + '<div style="margin-top:8px"><button id="tmgLSave">저장</button> '
-      + '<button id="tmgLRun" style="font-weight:bold">실행</button> '
-      + '<button id="tmgLRunAuto" style="font-weight:bold;color:#a94442;border-color:#a94442">실행+자동시작</button>'
+  + '<div style="margin-top:8px"><button id="tmgLSave">저장</button>'
       + '<span id="tmgLPendWrap"></span></div>'
+  + '<div style="margin-top:4px;display:flex;gap:4px;flex-wrap:wrap">'
+      + '<button id="tmgLRun" style="font-weight:bold">실행</button>'
+      + '<button id="tmgLRunAuto" style="font-weight:bold;color:#a94442;border-color:#a94442">실행+자동시작</button>'
+      + '<button id="tmgLRunSch" style="font-weight:bold;color:#8a6d0b;border-color:#8a6d0b">실행+예약</button>'
+    + '</div>'
   + '<div style="color:#888;font-size:11px;margin-top:3px">실행 = 창만 연다 · 실행+자동시작 = 확인 후 각 창이 대조를 통과하면 '
-      + AUTO_DELAY + '초 뒤 스스로 시작한다</div>';
+      + AUTO_DELAY + '초 뒤 스스로 시작 · 실행+예약 = 위 <b>예약</b> 시각까지 기다렸다가 시작</div>';
 
   bindMain();
   bindChunks();
@@ -864,6 +947,7 @@ function collect(clickedItem){
   cur.site    = q('#tmgLSite').value;
   cur.chd     = q('#tmgLChd').value;
   cur.rpt     = q('#tmgLRptOn').value ? (q('#tmgLRptH').value + ':' + q('#tmgLRptM').value) : '';
+  cur.sch     = q('#tmgLSchOn').value ? (q('#tmgLSchH').value + ':' + q('#tmgLSchM').value) : '';
   cur.useRange= q('#tmgLUse').checked;
   cur.total   = parseInt(q('#tmgLTotal').value,10) || 0;
   cur.first   = parseInt(q('#tmgLFirst').value,10) || 450;
@@ -896,21 +980,24 @@ function collectSkip(){
   });
 }
 
-// 자동시작 확인창 문구 — 되돌리기 어려운 작업이므로 무엇이 나가는지 한 화면에 모은다
-function confirmText(jobs){
+// 자동시작·예약 확인창 문구 — 되돌리기 어려운 작업이므로 무엇이 나가는지 한 화면에 모은다
+function confirmText(jobs, mode){
   var sets = jobs.map(function(j){ return j.markets.slice().sort().join(','); });
   var same = sets.every(function(x){ return x === sets[0]; });
   var mk = same ? (names(MARKETS, jobs[0].markets) || '없음 (업데이트만)') : '★ 구간별로 다름';
   var chdEl = q('#tmgLChd');
   var chd = (chdEl && chdEl.selectedIndex >= 0) ? chdEl.options[chdEl.selectedIndex].text.trim() : '';
+  var sched = (mode === 'sch');
   var lines = [
-    '[' + cur.name + '] 자동 시작',
+    '[' + cur.name + '] ' + (sched ? '예약 실행' : '자동 시작'),
     '',
     '· 수집사이트 : ' + nameOf(SITES, cur.site),
     '· 업데이트항목 : ' + (names(ITEMS, cur.items) || '없음 (전송만)'),
     '· 전송마켓 : ' + mk,
     '· 변동일 : ' + (chd || '전체'),
     '· 정렬 : 상품수집 날짜순(과거순)',
+    '· 시작 : ' + (sched ? ('★ ' + schWhen() + ' — 그때까지 창을 열어 둬야 합니다')
+                         : (AUTO_DELAY + '초 뒤 바로')),
     '· 반복 : ' + (parseRpt(cur.rpt) ? ('★ ' + rptLabel(cur.rpt) + ' — 창을 닫을 때까지 계속 반복합니다') : '없음 (1회만)')
   ];
   if(jobs[0].useRange){
@@ -920,37 +1007,69 @@ function confirmText(jobs){
   }else{
     lines.push('· 창 1개 · ★검색결과 전체');
   }
-  lines.push('', '각 창은 설정 대조를 통과하면 ' + AUTO_DELAY + '초 뒤 스스로 시작합니다.',
-    '(창마다 취소 버튼이 뜹니다. 대조에 실패한 창은 시작하지 않습니다.)',
-    '', '마켓에 전송된 내용은 되돌리기 어렵습니다. 진행할까요?');
+  if(sched){
+    lines.push('', '창을 지금 열어 두고, ' + schWhen() + '에 각 창이 대조를 다시 한 뒤 시작합니다.',
+      '(창마다 [예약 취소] 버튼이 뜹니다. 대조에 실패한 창은 시작하지 않습니다.)',
+      '★ 창을 닫거나 PC가 절전/종료되면 예약도 함께 사라집니다.');
+  }else{
+    lines.push('', '각 창은 설정 대조를 통과하면 ' + AUTO_DELAY + '초 뒤 스스로 시작합니다.',
+      '(창마다 취소 버튼이 뜹니다. 대조에 실패한 창은 시작하지 않습니다.)');
+  }
+  lines.push('', '마켓에 전송된 내용은 되돌리기 어렵습니다. 진행할까요?');
   return lines.join('\n');
 }
 
-async function doRun(auto){
+// 예약 시각을 사람이 읽는 형태로 — '오늘 01:00 (약 3시간 뒤)' / '내일 01:00 (약 7시간 뒤)'
+// 창은 몇 초 뒤에 열리며 각자 다시 계산하지만, 그 차이는 표시상 무의미하다.
+function schWhen(){
+  var t = parseRpt(cur.sch);
+  if(!t) return '';
+  var d = nextRunAt(t.h, t.m);
+  var today = (d.getDate() === new Date().getDate());
+  return (today ? '오늘 ' : '내일 ') + clockOf(d) + ' (약 ' + leftOf(d.getTime() - Date.now()) + ' 뒤)';
+}
+
+// mode: '' = 창만 열기 · 'auto' = 5초 뒤 자동시작 · 'sch' = 예약 시각에 시작
+async function doRun(mode){
   collect();
   var jobs = expand(cur);
   if(!jobs.length){ stat('<span style="color:#c9302c">열 작업이 없습니다.</span>'); return; }
 
-  if(auto){
+  if(mode === 'sch' && !parseRpt(cur.sch)){
+    stat('<span style="color:#c9302c">예약 시각이 없습니다. 위 <b>예약</b>을 '
+       + '[지정 시각에 시작]으로 바꾸고 시·분을 고르세요.</span>');
+    return;
+  }
+
+  if(mode){
     if(!cur.items.length && !cur.markets.length
        && jobs.every(function(j){ return !j.markets.length; })){
-      stat('<span style="color:#c9302c">업데이트 항목도 전송 마켓도 없습니다. 자동 시작할 수 없습니다.</span>');
+      stat('<span style="color:#c9302c">업데이트 항목도 전송 마켓도 없습니다. '
+         + (mode === 'sch' ? '예약할' : '자동 시작할') + ' 수 없습니다.</span>');
       return;
     }
-    if(!confirm(confirmText(jobs))){ stat('자동 시작을 취소했습니다.'); return; }
-    jobs = jobs.map(function(j){ return Object.assign({}, j, {auto:true}); });
+    if(!confirm(confirmText(jobs, mode))){
+      stat(mode === 'sch' ? '예약을 취소했습니다.' : '자동 시작을 취소했습니다.'); return;
+    }
+    jobs = jobs.map(function(j){
+      return Object.assign({}, j, mode === 'sch' ? {sched:true} : {auto:true});
+    });
   }
 
   var r = await openAll(jobs);
   pending = r.rest;
+  var tail = mode === 'sch'  ? '각 창이 <b>' + esc(hhmm(cur.sch)) + '</b>까지 기다렸다가 스스로 시작합니다. '
+                             + '<b>창을 닫지 마세요.</b>'
+           : mode === 'auto' ? '각 창이 대조를 통과하면 <b>스스로 시작</b>합니다.'
+           :                   '각 창에서 <b>시작 버튼을 직접</b> 누르세요.';
   stat((r.blocked ? '<span style="color:#c9302c">팝업이 차단됐습니다. 이 사이트의 팝업을 허용한 뒤 아래 버튼을 누르세요.</span><br>' : '')
-    + '창 ' + r.opened + '개를 열었습니다. '
-    + (auto ? '각 창이 대조를 통과하면 <b>스스로 시작</b>합니다.' : '각 창에서 <b>시작 버튼을 직접</b> 누르세요.'));
+    + '창 ' + r.opened + '개를 열었습니다. ' + tail);
   renderPending();
 }
 
 function bindMain(){
-  ['tmgLName','tmgLSite','tmgLChd','tmgLRptOn','tmgLRptH','tmgLRptM','tmgLUse','tmgLTotal','tmgLFirst','tmgLSize'].forEach(function(id){
+  ['tmgLName','tmgLSite','tmgLChd','tmgLSchOn','tmgLSchH','tmgLSchM','tmgLRptOn','tmgLRptH','tmgLRptM',
+   'tmgLUse','tmgLTotal','tmgLFirst','tmgLSize'].forEach(function(id){
     var e = q('#' + id); if(e) e.onchange = function(){ collect(); render(); };
   });
   qa('#tmgLBody input[data-kind=item],#tmgLBody input[data-kind=market]').forEach(function(e){
@@ -977,8 +1096,9 @@ function bindMain(){
     save(store); head(); stat('저장했습니다.');
   };
 
-  q('#tmgLRun').onclick     = function(){ doRun(false); };
-  q('#tmgLRunAuto').onclick = function(){ doRun(true); };
+  q('#tmgLRun').onclick     = function(){ doRun(''); };
+  q('#tmgLRunAuto').onclick = function(){ doRun('auto'); };
+  q('#tmgLRunSch').onclick  = function(){ doRun('sch'); };
 }
 
 function renderPending(){
@@ -1047,8 +1167,9 @@ function panel(){
     + '<button id="tmgLNew">새로</button> <button id="tmgLDel">삭제</button></div>'
     + '<div id="tmgLBody"></div>'
     + '<div id="tmgLStat" style="margin-top:8px;color:#333;min-height:32px;border-top:1px solid #eee;padding-top:6px">대기중</div>'
-    + '<div style="margin-top:4px;color:#888;font-size:11px">※ 자동시작은 대조를 통과한 창만 시작합니다. '
-    + '런처가 연 창은 더망고의 자동 반복(auto_repeat)을 꺼서 구간을 한 번만 돕니다(v1.4).</div>';
+    + '<div style="margin-top:4px;color:#888;font-size:11px">※ 자동시작·예약은 대조를 통과한 창만 시작합니다. '
+    + '런처가 연 창은 더망고의 자동 반복(auto_repeat)을 꺼서 구간을 한 번만 돕니다(v1.4). '
+    + '예약 대기 중에는 <b>창을 닫지 마세요</b> — 예약도 함께 사라집니다.</div>';
   document.body.appendChild(p);
 
   q('#tmgLPick').onchange = function(){
