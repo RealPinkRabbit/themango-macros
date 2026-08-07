@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         더망고 상품업데이트 런처
 // @namespace    solddeul.tmg
-// @version      1.8.0
-// @description  상품업데이트&마켓전송 화면의 설정(수집사이트/업데이트항목/전송마켓/변동일/범위)을 프리셋으로 저장해 두고, 범위를 구간으로 나눠 여러 창을 한꺼번에 띄운다. v1.6부터 구간은 최대 5개다(동시 5창 한도) — 1~4구간은 지정한 크기대로 끊고 5번째가 남은 전량을 맡는다. v1.7에 [실행+예약]을 추가했다 — 창을 미리 열어 두고 프리셋의 '예약' 시각이 되면 대조를 다시 한 뒤 스스로 시작한다. 구간마다 전송마켓을 따로 지정할 수 있다. 새로 열린 창은 프리셋과 실제 화면을 대조해 일치할 때만 시작 버튼을 열어 준다. [실행]은 창만 열고 사람이 시작을 누르며, [실행+자동시작]은 확인창 1회를 거쳐 각 창이 대조 통과 후 스스로 시작한다. v1.4부터 런처가 연 창에서는 더망고의 auto_repeat(자동 재시작)을 끈다. v1.5부터는 반복이 필요하면 런처가 직접 한다 — 프리셋에 '매일 HH:MM'을 지정하면 완료를 감지해 그 시각에 대조를 다시 하고 시작 버튼을 누른다.
+// @version      1.9.0
+// @description  상품업데이트&마켓전송 화면의 설정(수집사이트/업데이트항목/전송마켓/변동일/범위)을 프리셋으로 저장해 두고, 범위를 구간으로 나눠 여러 창을 한꺼번에 띄운다. v1.6부터 구간은 최대 5개다(동시 5창 한도) — 1~4구간은 지정한 크기대로 끊고 5번째가 남은 전량을 맡는다. v1.7에 [실행+예약]을 추가했다 — 창을 미리 열어 두고 프리셋의 '예약' 시각이 되면 대조를 다시 한 뒤 스스로 시작한다. 구간마다 전송마켓을 따로 지정할 수 있다. 새로 열린 창은 프리셋과 실제 화면을 대조해 일치할 때만 시작 버튼을 열어 준다. [실행]은 창만 열고 사람이 시작을 누르며, [실행+자동시작]은 확인창 1회를 거쳐 각 창이 대조 통과 후 스스로 시작한다. v1.4부터 런처가 연 창에서는 더망고의 auto_repeat(자동 재시작)을 끈다. v1.5부터는 반복이 필요하면 런처가 직접 한다 — 프리셋에 '매일 HH:MM'을 지정하면 완료를 감지해 그 시각에 대조를 다시 하고 시작 버튼을 누른다. ★v1.9에서 반복 2회차가 늘 0건으로 끝나던 버그를 고쳤다 — 더망고의 회차 커서 초기화가 auto_repeat 블록 안에 들어 있어, v1.4가 반복을 끄면서 초기화까지 같이 꺼져 있었다. 시작 직전에 런처가 커서를 대신 되돌리고, 회차가 0건으로 끝나면 배너와 탭 제목으로 드러낸다.
 // @match        https://tmg4682.mycafe24.com/mall/admin/admin_goods_update.php*
 // @run-at       document-idle
 // @grant        none
@@ -67,6 +67,43 @@
 //
 //  런처가 연 창에서는 자동/수동을 가리지 않고 더망고 반복을 끈다.
 //  반복이 필요하면 런처가 직접 한다(v1.5, repeatLoop 참조) — 평소와 같은 시작 경로를 타므로 루프가 1개다.
+//
+// ── ★★ 회차 커서 (2026-08-07 런타임 실측, v1.9의 근거) ──────
+//  증상: 예약(1회차)은 정상인데 다음 날 반복(2회차)은 마켓 로그인 체크만 하고
+//        "모두 완료되었습니다"로 즉시 끝났다. 처리 건수 0. 창 5개 전부 같았다.
+//
+//  ★ 목록 재적재는 정상이었다(첫 가설은 틀렸다).
+//    start_ini_all() 은 끝에서 update_page_load('all') 을 부르고(마켓이 있으면
+//    market_login_check_shell() 을 거쳐 같은 곳으로 온다), 그 안에서
+//    #all_update_market 에 shell 을 .load() 해 a_checked 를 다시 채운다.
+//    #qry·#order_sql 은 load 대상 바깥이라 살아남는다 — 조건도 온전하다.
+//
+//  ★ 진짜 원인은 전역 커서 inter_idx 다. scrapDetailParallel()은 이렇게 생겼다:
+//        if (inter_idx < a_checked.length) { ... a_checked[inter_idx] 처리 ... }
+//        else {
+//            ... 완료 로그 ...
+//            if (auto_repeat && start_mode == '…') {      // ← 토큰 247~710
+//                inter_idx = 0; show_idx = 0; send_count = 0;
+//                st11_idx = 1; auction20_idx = 1; ... (마켓 순번 34개)
+//                ... 재시작 타이머 ...
+//            }
+//        }
+//    ★ 커서 초기화 37개가 예외 없이 if(auto_repeat …) 블록 안에 있다(중괄호 매칭 확인).
+//      그 블록이 else 절의 거의 전부다(함수 전체 712토큰 중 247~710).
+//    → v1.4가 auto_repeat 을 falsy 로 만들면 초기화도 같이 꺼진다.
+//      1회차가 끝나면 inter_idx 는 450(=a_checked.length)에 멈춰 있고,
+//      2회차는 450개를 정상적으로 다시 실어 오고도 450<450 이 거짓이라 곧장 완료로 빠진다.
+//
+//  ★ 즉 auto_repeat 은 '재시작 타이머'만이 아니라 '회차 간 상태 초기화'까지 겸하고 있었다.
+//    3-9-1장은 이 플래그를 재시작 배수 문제로만 봤는데 책임이 하나 더 있었다.
+//  ★ 실패가 조용했다 — 초록 배너 '▶ N회차를 시작했습니다', 탭 제목 [진행중],
+//    완료 감지까지 전부 정상 동작했다. 그래서 v1.5 도입 이후 반복이 한 번도
+//    제대로 돈 적이 없는데도 몰랐다. → v1.9가 처리 건수를 읽어 0건을 드러낸다.
+//
+//  대응(v1.9): resetCursors()가 시작 직전에 커서 3개를 되돌린다.
+//    마켓 순번 *_idx 34개는 건드리지 않는다 — if 조건에 걸린 것을 보지 못했고
+//    (로그 번호 용도로 추정) 검증하지 않은 변수를 함께 건드릴 이유가 없다.
+//    부족했다면 0건 경고가 다음 날 아침에 드러낸다.
 // ────────────────────────────────────────────────────────────
 var SITES = [
   {v:'a_rt',               t:'ABCmart.a-rt.com'},
@@ -547,11 +584,13 @@ function setTitle(tag){
   }catch(e){}
 }
 
-function doneBanner(head, info){
-  banner('🏁 ' + head + ' — <b>이 구간이 끝났습니다.</b>'
+function doneBanner(head, info, c){
+  banner('🏁 ' + head + ' — <b>이 구간이 끝났습니다.</b>' + cntTail(c)
     + '<br>&nbsp;&nbsp;· ' + info
-    + '<br>&nbsp;&nbsp;· 런처가 자동 반복을 껐으므로 이 창은 더 이상 아무것도 하지 않습니다. 닫으셔도 됩니다.', '#2e6da4');
-  setTitle('완료');
+    + zeroWarn(c)
+    + '<br>&nbsp;&nbsp;· 런처가 자동 반복을 껐으므로 이 창은 더 이상 아무것도 하지 않습니다. 닫으셔도 됩니다.',
+    (c && c.zero) ? '#c9302c' : '#2e6da4');
+  setTitle((c && c.zero) ? '완료·0건' : '완료');
 }
 
 // ── ★ 반복 실행 — 더망고 기능을 쓰지 않고 런처가 직접 재시작한다 (v1.5) ──
@@ -606,6 +645,61 @@ function lateCheck(target){
        + '유예 ' + Math.round(GRACE_MS / 60000) + '분을 넘겨 <b>시작하지 않았습니다.</b>';
 }
 
+// ── ★ 회차 커서 초기화 · 처리 건수 판정 (v1.9, 2026-08-07) ──
+// 근거는 파일 위쪽 '회차 커서' 실측 주석. 더망고의 초기화가 auto_repeat 블록 안에 있어
+// v1.4가 반복을 끄면서 같이 꺼졌다 → 2회차부터 늘 0건이었다.
+// 되돌리는 것은 진행 커서 3개뿐이다. 마켓 순번 *_idx 34개는 그대로 둔다.
+var CURSORS = {inter_idx:0, show_idx:0, send_count:0};
+
+// 성공하면 null, 문제가 있으면 사유 문자열.
+// ★ 변수가 아예 없으면 실패로 본다 — 그냥 대입하면 페이지가 안 쓰는 전역을 새로 만들 뿐이고,
+//   진짜 커서는 손대지 못한 채 또 조용히 0건으로 끝난다.
+function resetCursors(){
+  var missing = [], failed = [];
+  Object.keys(CURSORS).forEach(function(n){
+    var had;
+    try{ had = (typeof window[n] !== 'undefined'); }catch(e){ had = false; }
+    if(!had){ missing.push(n); return; }
+    try{
+      window[n] = CURSORS[n];
+      if(window[n] !== CURSORS[n]) failed.push(n);
+    }catch(e){ failed.push(n); }
+  });
+  if(missing.length) return '더망고 회차 커서를 찾지 못했습니다 (' + missing.join(', ')
+    + '). 페이지 구조가 바뀐 것 같습니다 — 이대로 시작하면 한 건도 처리하지 않고 끝날 수 있습니다.';
+  if(failed.length) return '회차 커서를 되돌리지 못했습니다 (' + failed.join(', ') + ').';
+  return null;
+}
+
+// 완료 시점의 inter_idx = 이번 회차가 실제로 처리한 건수.
+// (시작 직전에 0으로 되돌렸으므로 완료 시 값이 곧 처리 건수다)
+// ★ window.* 가 아니라 맨이름으로 읽는다 — isLoaded 건과 같은 이유.
+function cursorNow(){
+  try{ return (typeof inter_idx === 'undefined') ? null : Number(inter_idx); }
+  catch(e){ return null; }
+}
+function targetNow(){
+  try{ return (typeof a_checked === 'undefined' || !a_checked) ? null : a_checked.length; }
+  catch(e){ return null; }
+}
+function countOf(){
+  var n = cursorNow(), t = targetNow();
+  if(n === null) return {zero:false, html:''};
+  return {
+    zero: n === 0,
+    html: '처리 ' + n.toLocaleString() + '건' + (t === null ? '' : ' / 대상 ' + t.toLocaleString() + '건')
+  };
+}
+function cntTail(c){ return (c && c.html) ? ' (' + c.html + ')' : ''; }
+// ★ 경고형이다 — 반복을 멈추지 않는다.
+//   구간이 검색결과 밖으로 밀려나면(총건수가 줄면 마지막 구간이 그렇다) 0건이 정당하기 때문이다.
+function zeroWarn(c){
+  if(!c || !c.zero) return '';
+  return '<br>&nbsp;&nbsp;<b>⚠ 이 회차는 한 건도 처리하지 않았습니다.</b>'
+       + ' 구간이 검색결과 밖이면 정상일 수 있습니다. 그게 아니라면 회차 커서가 되돌려지지 않은 것입니다'
+       + '(파일 위 \'회차 커서\' 주석). <b>반복은 계속합니다.</b>';
+}
+
 // ── 대조 → 범위 확인 → 시작 클릭 (반복 회차·예약 시작 공용) ──
 // 실패하면 사유 문자열을, 성공하면 null을 돌려준다.
 // ★ 자동시작(autoStart)은 '로딩중' alert 재시도 루프가 따로 있어 이 함수를 쓰지 않는다.
@@ -624,6 +718,9 @@ async function verifyAndStart(job){
   }
   var btn = document.getElementById(startBtnId(job));
   if(!btn) return '시작 버튼을 찾지 못했습니다.';
+  // ★ 클릭 직전에 회차 커서를 되돌린다(v1.9). 이게 빠지면 2회차부터 0건으로 끝난다.
+  var cerr = resetCursors();
+  if(cerr) return cerr;
   var r = await pressStart(btn);
   if(!r.started) return '시작하지 못했습니다 — ' + (r.alerts || '더망고가 아무 메시지도 내지 않았습니다.');
   return null;
@@ -700,7 +797,7 @@ async function scheduleStart(job, head, info){
   setTitle('진행중');
 }
 
-async function repeatLoop(job, head, info){
+async function repeatLoop(job, head, info, last){
   var at = parseRpt(job.rpt);
   if(!at) return;                       // 여기까지 왔는데 못 읽으면 반복하지 않는다
   var when = rptLabel(job.rpt);
@@ -724,10 +821,11 @@ async function repeatLoop(job, head, info){
 
   while(true){
     var target = nextRunAt(at.h, at.m);
-    setTitle('대기');
-    banner('🔁 <b>' + head + '</b> — ' + round + '회차 완료. <b>' + when + '</b>에 다시 시작합니다.'
+    setTitle((last && last.zero) ? '대기·0건' : '대기');
+    banner('🔁 <b>' + head + '</b> — ' + round + '회차 완료' + cntTail(last) + '. <b>' + when + '</b>에 다시 시작합니다.'
       + '<br>&nbsp;&nbsp;· ' + info
-      + '<br>&nbsp;&nbsp;· <span id="tmgRptMsg">…</span>' + STOP, '#2e6da4');
+      + zeroWarn(last)
+      + '<br>&nbsp;&nbsp;· <span id="tmgRptMsg">…</span>' + STOP, (last && last.zero) ? '#c9302c' : '#2e6da4');
     bindStop();
 
     var meter = tickMeter(), lastTick = 0;
@@ -756,6 +854,7 @@ async function repeatLoop(job, head, info){
       + '<br>&nbsp;&nbsp;· ' + info + STOP, '#1f7a3d');
     bindStop();
     await awaitDone();
+    last = countOf();                   // ★ 이번 회차가 실제로 몇 건을 처리했는지 (v1.9)
     if(stopped){ bye(); return; }
   }
 }
@@ -763,8 +862,9 @@ async function repeatLoop(job, head, info){
 // 1회차 완료를 기다린 뒤, 반복 설정이 있으면 반복으로 넘긴다.
 async function runWatcher(job, head, info){
   await awaitDone();
-  if(parseRpt(job.rpt)) await repeatLoop(job, head, info);
-  else doneBanner(head, info);
+  var c = countOf();
+  if(parseRpt(job.rpt)) await repeatLoop(job, head, info, c);
+  else doneBanner(head, info, c);
 }
 
 function childMode(jid){
