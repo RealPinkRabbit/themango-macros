@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         더망고 상품업데이트 런처
 // @namespace    solddeul.tmg
-// @version      1.9.0
+// @version      1.9.1
 // @description  상품업데이트&마켓전송 화면의 설정(수집사이트/업데이트항목/전송마켓/변동일/범위)을 프리셋으로 저장해 두고, 범위를 구간으로 나눠 여러 창을 한꺼번에 띄운다. v1.6부터 구간은 최대 5개다(동시 5창 한도) — 1~4구간은 지정한 크기대로 끊고 5번째가 남은 전량을 맡는다. v1.7에 [실행+예약]을 추가했다 — 창을 미리 열어 두고 프리셋의 '예약' 시각이 되면 대조를 다시 한 뒤 스스로 시작한다. 구간마다 전송마켓을 따로 지정할 수 있다. 새로 열린 창은 프리셋과 실제 화면을 대조해 일치할 때만 시작 버튼을 열어 준다. [실행]은 창만 열고 사람이 시작을 누르며, [실행+자동시작]은 확인창 1회를 거쳐 각 창이 대조 통과 후 스스로 시작한다. v1.4부터 런처가 연 창에서는 더망고의 auto_repeat(자동 재시작)을 끈다. v1.5부터는 반복이 필요하면 런처가 직접 한다 — 프리셋에 '매일 HH:MM'을 지정하면 완료를 감지해 그 시각에 대조를 다시 하고 시작 버튼을 누른다. ★v1.9에서 반복 2회차가 늘 0건으로 끝나던 버그를 고쳤다 — 더망고의 회차 커서 초기화가 auto_repeat 블록 안에 들어 있어, v1.4가 반복을 끄면서 초기화까지 같이 꺼져 있었다. 시작 직전에 런처가 커서를 대신 되돌리고, 회차가 0건으로 끝나면 배너와 탭 제목으로 드러낸다.
 // @match        https://tmg4682.mycafe24.com/mall/admin/admin_goods_update.php*
 // @run-at       document-idle
@@ -100,10 +100,11 @@
 //    완료 감지까지 전부 정상 동작했다. 그래서 v1.5 도입 이후 반복이 한 번도
 //    제대로 돈 적이 없는데도 몰랐다. → v1.9가 처리 건수를 읽어 0건을 드러낸다.
 //
-//  대응(v1.9): resetCursors()가 시작 직전에 커서 3개를 되돌린다.
-//    마켓 순번 *_idx 34개는 건드리지 않는다 — if 조건에 걸린 것을 보지 못했고
-//    (로그 번호 용도로 추정) 검증하지 않은 변수를 함께 건드릴 이유가 없다.
-//    부족했다면 0건 경고가 다음 날 아침에 드러낸다.
+//  대응(v1.9.1): resetCursors()가 시작 직전에 37개를 전부 되돌린다.
+//    ★ v1.9.0은 진행 커서 3개만 되돌렸다가 로그가 [1] [501] [2] [502] 로 뒤섞이는
+//      별개의 증상을 냈다 — 마켓 순번의 자가보정이 한 방향뿐이기 때문이다.
+//      자세한 것은 resetCursors() 위 주석. '검증 안 된 것은 건드리지 않는다'가
+//      이 경우엔 오히려 나빴다: 반쯤만 되돌린 상태가 아무것도 안 되돌린 것보다 나쁘다.
 // ────────────────────────────────────────────────────────────
 var SITES = [
   {v:'a_rt',               t:'ABCmart.a-rt.com'},
@@ -645,26 +646,48 @@ function lateCheck(target){
        + '유예 ' + Math.round(GRACE_MS / 60000) + '분을 넘겨 <b>시작하지 않았습니다.</b>';
 }
 
-// ── ★ 회차 커서 초기화 · 처리 건수 판정 (v1.9, 2026-08-07) ──
+// ── ★ 회차 커서 초기화 · 처리 건수 판정 (v1.9, 2026-08-07 / v1.9.1, 2026-08-08) ──
 // 근거는 파일 위쪽 '회차 커서' 실측 주석. 더망고의 초기화가 auto_repeat 블록 안에 있어
 // v1.4가 반복을 끄면서 같이 꺼졌다 → 2회차부터 늘 0건이었다.
-// 되돌리는 것은 진행 커서 3개뿐이다. 마켓 순번 *_idx 34개는 그대로 둔다.
+//
+// ★★ v1.9.0은 진행 커서 3개만 되돌렸다가 다른 증상을 냈다 (2026-08-08 실측).
+//   마켓 전송 함수는 전부 이렇게 시작한다:
+//       function api_coupang(uid){ if (coupang_idx <= show_idx) coupang_idx = eval(show_idx); … }
+//   (api_11st · api_auction20 · api_gmarket20 · api_smartstore 전부 동일 — 5개 마켓 실측 확인)
+//   ★ 자가보정이 '한 방향'이다. 마켓 순번이 show_idx보다 뒤처지면 따라 올라오지만,
+//     앞서 있으면 절대 내려오지 않는다.
+//   → show_idx만 0으로 되돌리면 마켓 순번은 1회차 끝값(501…)을 그대로 들고 간다.
+//     로그가 [1] [501] [2] [502] … 로 뒤섞여 한 탭에서 두 작업이 도는 것처럼 보인다.
+//     (작업 배열을 걷는 커서는 inter_idx 하나뿐이라 상품 처리 자체는 1갈래다.)
+//   → v1.9.1부터 더망고와 똑같이 37개를 전부 되돌린다.
+//
+// ★ 성격이 달라 취급도 나눈다.
+//   · 진행 커서 3개 — 없으면 시작하지 않는다. 없다는 건 페이지 구조가 바뀌었다는 뜻이고,
+//     그냥 대입하면 페이지가 쓰지 않는 전역을 새로 만들 뿐이라 또 조용히 0건으로 끝난다.
+//   · 마켓 순번 34개 — 없으면 조용히 건너뛴다. ★ 더망고의 초기화 목록에는 test0_idx·test1_idx가
+//     들어 있지만 이 페이지에는 그 전역이 없다(실제로 있는 것은 test_idx다). 없는 것을 이유로
+//     시작을 막으면 런처가 아예 못 돈다.
 var CURSORS = {inter_idx:0, show_idx:0, send_count:0};
+var MARKET_IDX = ['st11','auction','auction20','gmarket','gmarket20','interpark','smartstore','coupang',
+  'wemakeprice','tmon','tmon2','mustit','lotteon','ssg','ssgmall','lfmall','reebonz','melchi','cafe24',
+  'godomall','imweb','hakyung','balaan','shopify','shopee','trenbe','playauto','ktalpha','qoo10jp',
+  'toss','ebay','site','test0','test1'].map(function(m){ return m + '_idx'; });
 
 // 성공하면 null, 문제가 있으면 사유 문자열.
-// ★ 변수가 아예 없으면 실패로 본다 — 그냥 대입하면 페이지가 안 쓰는 전역을 새로 만들 뿐이고,
-//   진짜 커서는 손대지 못한 채 또 조용히 0건으로 끝난다.
 function resetCursors(){
   var missing = [], failed = [];
-  Object.keys(CURSORS).forEach(function(n){
+  function put(n, v, required){
     var had;
     try{ had = (typeof window[n] !== 'undefined'); }catch(e){ had = false; }
-    if(!had){ missing.push(n); return; }
+    if(!had){ if(required) missing.push(n); return; }   // 마켓 순번은 없어도 그냥 넘어간다
     try{
-      window[n] = CURSORS[n];
-      if(window[n] !== CURSORS[n]) failed.push(n);
+      window[n] = v;
+      if(window[n] !== v) failed.push(n);
     }catch(e){ failed.push(n); }
-  });
+  }
+  Object.keys(CURSORS).forEach(function(n){ put(n, CURSORS[n], true); });
+  MARKET_IDX.forEach(function(n){ put(n, 1, false); });
+
   if(missing.length) return '더망고 회차 커서를 찾지 못했습니다 (' + missing.join(', ')
     + '). 페이지 구조가 바뀐 것 같습니다 — 이대로 시작하면 한 건도 처리하지 않고 끝날 수 있습니다.';
   if(failed.length) return '회차 커서를 되돌리지 못했습니다 (' + failed.join(', ') + ').';
