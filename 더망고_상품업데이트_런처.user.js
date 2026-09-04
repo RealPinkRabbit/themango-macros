@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         더망고 상품업데이트 런처
 // @namespace    solddeul.tmg
-// @version      1.10.0
-// @description  상품업데이트&마켓전송 화면의 설정(수집사이트/업데이트항목/전송마켓/변동일/범위)을 프리셋으로 저장해 두고, 범위를 구간으로 나눠 여러 창을 한꺼번에 띄운다. v1.6부터 구간은 최대 5개다(동시 5창 한도) — 1~4구간은 지정한 크기대로 끊고 5번째가 남은 전량을 맡는다. v1.7에 [실행+예약]을 추가했다 — 창을 미리 열어 두고 프리셋의 '예약' 시각이 되면 대조를 다시 한 뒤 스스로 시작한다. 구간마다 전송마켓을 따로 지정할 수 있다. 새로 열린 창은 프리셋과 실제 화면을 대조해 일치할 때만 시작 버튼을 열어 준다. [실행]은 창만 열고 사람이 시작을 누르며, [실행+자동시작]은 확인창 1회를 거쳐 각 창이 대조 통과 후 스스로 시작한다. v1.4부터 런처가 연 창에서는 더망고의 auto_repeat(자동 재시작)을 끈다. v1.5부터는 반복이 필요하면 런처가 직접 한다 — 프리셋에 '매일 HH:MM'을 지정하면 완료를 감지해 그 시각에 대조를 다시 하고 시작 버튼을 누른다. ★v1.9에서 반복 2회차가 늘 0건으로 끝나던 버그를 고쳤다 — 더망고의 회차 커서 초기화가 auto_repeat 블록 안에 들어 있어, v1.4가 반복을 끄면서 초기화까지 같이 꺼져 있었다. 시작 직전에 런처가 커서를 대신 되돌리고, 회차가 0건으로 끝나면 배너와 탭 제목으로 드러낸다. ★v1.10에서 화면의 상세 검색조건(검색유형+검색어·마켓등록여부·날짜검색·상품상태·통화·가격/상품번호 범위 등)을 프리셋에 담을 수 있게 했다 — [현재 화면 조건 담기] 한 번이면 되고, 건수조회·구간분할·예약·반복·대조가 모두 그 조건을 따른다. 같은 수집사이트를 두 사업자가 나눠 쓰는 경우(검색필터명 검색으로 구분) 때문에 필요해졌다.
+// @version      1.11.0
+// @description  상품업데이트&마켓전송 화면의 설정(수집사이트/업데이트항목/전송마켓/변동일/범위)을 프리셋으로 저장해 두고, 범위를 구간으로 나눠 여러 창을 한꺼번에 띄운다. v1.6부터 구간은 최대 5개다(동시 5창 한도) — 1~4구간은 지정한 크기대로 끊고 5번째가 남은 전량을 맡는다. v1.7에 [실행+예약]을 추가했다 — 창을 미리 열어 두고 프리셋의 '예약' 시각이 되면 대조를 다시 한 뒤 스스로 시작한다. 구간마다 전송마켓을 따로 지정할 수 있다. 새로 열린 창은 프리셋과 실제 화면을 대조해 일치할 때만 시작 버튼을 열어 준다. [실행]은 창만 열고 사람이 시작을 누르며, [실행+자동시작]은 확인창 1회를 거쳐 각 창이 대조 통과 후 스스로 시작한다. v1.4부터 런처가 연 창에서는 더망고의 auto_repeat(자동 재시작)을 끈다. v1.5부터는 반복이 필요하면 런처가 직접 한다 — 프리셋에 '매일 HH:MM'을 지정하면 완료를 감지해 그 시각에 대조를 다시 하고 시작 버튼을 누른다. ★v1.9에서 반복 2회차가 늘 0건으로 끝나던 버그를 고쳤다 — 더망고의 회차 커서 초기화가 auto_repeat 블록 안에 들어 있어, v1.4가 반복을 끄면서 초기화까지 같이 꺼져 있었다. 시작 직전에 런처가 커서를 대신 되돌리고, 회차가 0건으로 끝나면 배너와 탭 제목으로 드러낸다. ★v1.10에서 화면의 상세 검색조건(검색유형+검색어·마켓등록여부·날짜검색·상품상태·통화·가격/상품번호 범위 등)을 프리셋에 담을 수 있게 했다 — [현재 화면 조건 담기] 한 번이면 되고, 건수조회·구간분할·예약·반복·대조가 모두 그 조건을 따른다. 같은 수집사이트를 두 사업자가 나눠 쓰는 경우(검색필터명 검색으로 구분) 때문에 필요해졌다. ★v1.11에서 v1.6이 5로 고정했던 구간(창) 수 상한을 프리셋에서 정할 수 있게 했다 — 기본 5, 최대 10. 5를 넘기면 패널과 확인창에 경고가 붙는다(더망고가 5창 초과를 어떻게 처리하는지는 아직 확인된 적이 없다).
 // @match        https://tmg4682.mycafe24.com/mall/admin/admin_goods_update.php*
 // @run-at       document-idle
 // @grant        none
@@ -305,6 +305,7 @@ function blank(){
     rpt:'',                      // 반복 — '' = 안 함, 'H:M' = 매일 그 시각
     sch:'',                      // 예약 — '' = 바로 시작, 'H:M' = 그 시각에 1회차 시작 (v1.7)
     cond:null,                   // 화면에서 담은 상세 검색조건 { 파라미터: 값 } (v1.10)
+    maxWin:WIN_DEFAULT,          // 동시에 띄울 창(구간) 수 상한 (v1.11)
     useRange:true, total:0, first:450, size:500, skip:[]
   };
 }
@@ -322,21 +323,35 @@ function normalizeItems(list, justClicked){
 
 // ────────────────────────────────────────────────────────────
 // 구간 분할 — 첫 구간 450, 이후 500 (둘 다 프리셋에서 변경 가능)
-// ★ 구간 수를 MAX_CHUNKS(5)로 제한한다 — 사이트당 동시 5창이 한도이기 때문이다(강의 3-24).
-//   1~4구간은 first/size 그대로 끊고, 5번째 구간이 남은 전량을 흡수한다.
-//   예) 총 9,159 · 450/500 → 1~450 / 451~950 / 951~1450 / 1451~1950 / 1951~9159
+// ★ 구간 수를 상한으로 제한한다. 1~(n-1)구간은 first/size 그대로 끊고, n번째가 남은 전량을 흡수한다.
+//   예) 총 9,159 · 450/500 · 상한 5 → 1~450 / 451~950 / 951~1450 / 1451~1950 / 1951~9159
 //   → 마지막 구간이 가장 커진다. 이건 의도한 동작이다(창 수 상한이 우선).
-//   총건수가 작아 4구간 안에 끝나면 5번째 구간은 생기지 않는다.
+//   총건수가 작아 그 전에 끝나면 마지막 구간은 생기지 않는다.
+//
+// ★★ v1.11부터 상한을 프리셋에서 정한다(maxWin). 기본값은 여전히 5다.
+//   5는 강의 3-24의 "수집사이트당 동시 5창" 권고에서 왔다. 그보다 늘리는 것은
+//   **아직 검증되지 않은 영역**이다 — 더망고 서버가 5창을 넘겼을 때 어떻게 반응하는지
+//   (거부 / 큐 / 조용한 실패) 확인한 적이 없다. 그래서 막지는 않되, 5를 넘기면
+//   패널과 확인창에 경고를 띄우고 판정법을 함께 적어 둔다.
+//   ★ 늘려 보고 판정할 때는 '완료 여부'가 아니라 **창별 처리 건수**를 볼 것 —
+//     조용한 실패는 완료로 보인다(3-9-3 사고와 같은 함정).
 // ────────────────────────────────────────────────────────────
-var MAX_CHUNKS = 5;
+var WIN_DEFAULT = 5;    // 강의 권고치
+var WIN_LIMIT   = 10;   // 패널에서 지정할 수 있는 최대치. 더 늘리려면 이 값을 고친다.
+function maxWinOf(p){
+  var n = parseInt(p && p.maxWin, 10);
+  if(!(n >= 1)) return WIN_DEFAULT;
+  return Math.min(n, WIN_LIMIT);
+}
 function chunks(p){
   var total = parseInt(p.total,10) || 0;
   var first = parseInt(p.first,10) || 450;
   var size  = parseInt(p.size,10)  || 500;
+  var max   = maxWinOf(p);
   var out = [], s = 1;
   if(total <= 0 || first <= 0 || size <= 0) return out;
   while(s <= total){
-    var isLast = (out.length === MAX_CHUNKS - 1);   // 마지막 구간은 끝까지 이어 붙인다
+    var isLast = (out.length === max - 1);   // 마지막 구간은 끝까지 이어 붙인다
     var len = out.length === 0 ? first : size;
     var e = isLast ? total : Math.min(s + len - 1, total);
     out.push({no: out.length + 1, start: s, end: e});
@@ -1153,6 +1168,32 @@ function condBoxHtml(){
   return t.map(function(x){ return '· ' + esc(x); }).join('<br>');
 }
 
+// 창 수 상한 경고.
+// ★ WIN_DEFAULT(5)는 강의 3-24의 권고치이고, 그 위는 **아직 확인되지 않은 영역**이다.
+//   막지는 않되 무엇이 미확인인지와 판정법을 같이 적어 준다.
+function anyMarkets(){
+  if((cur.markets || []).length) return true;
+  var c = cur.cmk || {};
+  return Object.keys(c).some(function(k){ return (c[k] || []).length > 0; });
+}
+function winWarn(){
+  var n = maxWinOf(cur), out = [];
+  if(n > WIN_DEFAULT){
+    out.push('창 ' + n + '개는 강의 권고(' + WIN_DEFAULT + '창)를 넘습니다. 더망고가 '
+      + WIN_DEFAULT + '창 초과를 어떻게 처리하는지(거부 / 대기 / 조용한 실패) 확인된 적이 없습니다.');
+    out.push('판정은 완료 여부가 아니라 창별 [처리 N건] 배너로 하세요 — 조용한 실패는 완료처럼 보입니다.');
+  }
+  if(n > 1 && anyMarkets())
+    out.push('전송 마켓이 있습니다. 전송(더망고→마켓)은 창을 늘려도 리소스가 나뉘어 빨라지지 않습니다(강의 권고 1창).');
+  return out;
+}
+function winWarnHtml(){
+  var w = winWarn();
+  if(!w.length) return '';
+  return '<div style="margin-top:4px;padding:4px 6px;background:#fcf8e3;border:1px solid #e6d9a2;'
+       + 'border-radius:4px;color:#8a6d3b;font-size:11px">⚠ ' + w.map(esc).join('<br>⚠ ') + '</div>';
+}
+
 function chunkList(p){
   var cs = chunks(p);
   if(!cs.length) return '<div style="color:#888">건수를 조회하면 구간이 만들어집니다.</div>';
@@ -1236,8 +1277,12 @@ function render(){
       + '<div style="margin-top:4px">총 <input id="tmgLTotal" type="number" value="' + (cur.total||0) + '" style="width:70px">건'
       + ' · 첫 <input id="tmgLFirst" type="number" value="' + (cur.first||450) + '" style="width:52px">'
       + ' · 이후 <input id="tmgLSize" type="number" value="' + (cur.size||500) + '" style="width:52px"></div>'
-      + '<div style="color:#888;font-size:11px;margin-top:2px">구간은 <b>최대 ' + MAX_CHUNKS + '개</b>입니다(동시 ' + MAX_CHUNKS
-      + '창 한도). 마지막 구간이 남은 전량을 맡으므로 가장 커집니다.</div>'
+      + '<div style="margin-top:4px">창 최대 <input id="tmgLMaxWin" type="number" min="1" max="' + WIN_LIMIT
+      + '" value="' + maxWinOf(cur) + '" style="width:52px">개 <span style="color:#888;font-size:11px">(1~' + WIN_LIMIT
+      + ', 권고 ' + WIN_DEFAULT + ')</span></div>'
+      + winWarnHtml()
+      + '<div style="color:#888;font-size:11px;margin-top:2px">구간은 <b>최대 ' + maxWinOf(cur)
+      + '개</b>입니다. 마지막 구간이 남은 전량을 맡으므로 가장 커집니다.</div>'
       + '<div id="tmgLChunks" style="max-height:220px;overflow:auto;margin-top:4px;border-top:1px solid #eee;padding-top:4px">'
       + (cur.useRange ? chunkList(cur) : '<div style="color:#888">범위 분할을 사용하지 않습니다.</div>') + '</div>'
     + '</fieldset>'
@@ -1270,6 +1315,9 @@ function collect(clickedItem){
   cur.total   = parseInt(q('#tmgLTotal').value,10) || 0;
   cur.first   = parseInt(q('#tmgLFirst').value,10) || 450;
   cur.size    = parseInt(q('#tmgLSize').value,10) || 500;
+  // 창 수는 1~WIN_LIMIT로 가둔다. 오타 하나로 창이 수십 개 열리지 않게.
+  var mw = parseInt(q('#tmgLMaxWin') ? q('#tmgLMaxWin').value : '', 10);
+  cur.maxWin  = (mw >= 1) ? Math.min(mw, WIN_LIMIT) : WIN_DEFAULT;
 
   var items = [], markets = [], perChunk = {};
   qa('#tmgLBody input[data-kind]').forEach(function(e){
@@ -1335,6 +1383,8 @@ function confirmText(jobs, mode){
     lines.push('', '각 창은 설정 대조를 통과하면 ' + AUTO_DELAY + '초 뒤 스스로 시작합니다.',
       '(창마다 취소 버튼이 뜹니다. 대조에 실패한 창은 시작하지 않습니다.)');
   }
+  var warn = winWarn();
+  if(warn.length) lines.push('', '⚠ ' + warn.join('\n⚠ '));
   lines.push('', '마켓에 전송된 내용은 되돌리기 어렵습니다. 진행할까요?');
   return lines.join('\n');
 }
@@ -1389,7 +1439,7 @@ async function doRun(mode){
 
 function bindMain(){
   ['tmgLName','tmgLSite','tmgLChd','tmgLSchOn','tmgLSchH','tmgLSchM','tmgLRptOn','tmgLRptH','tmgLRptM',
-   'tmgLUse','tmgLTotal','tmgLFirst','tmgLSize'].forEach(function(id){
+   'tmgLUse','tmgLTotal','tmgLFirst','tmgLSize','tmgLMaxWin'].forEach(function(id){
     var e = q('#' + id); if(e) e.onchange = function(){ collect(); render(); };
   });
   qa('#tmgLBody input[data-kind=item],#tmgLBody input[data-kind=market]').forEach(function(e){
