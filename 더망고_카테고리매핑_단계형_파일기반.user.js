@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         더망고 카테고리매핑 단계형 파일기반(수집→Claude매핑→적용)
 // @namespace    solddeul.tmg
-// @version      2.0
-// @description  단계형 카테고리매핑을 "규칙 자동선택"이 아니라 "파일 기반 결정론"으로 처리. ① 수집(Export): 마켓별 신발 카테고리 전체(카탈로그: 경로+코드) + 리프(매핑대상)를 엑셀로 내려받음. ② 매핑: Claude가 그 엑셀을 받아 규칙대로 각 리프×마켓에 카탈로그 경로를 채움. ③ 적용(Apply): 매핑 엑셀을 불러오면 카탈로그로 경로→코드를 해석해 리프마다 설정페이지에서 주입·고시·저장(fetch-POST)·되읽기 검증. 규칙이 매크로에서 빠져 Claude 판단으로 이동 → 신상품마다 정규식 손볼 필요 없음.
+// @version      2.1
+// @description  단계형 카테고리매핑을 "규칙 자동선택"이 아니라 "파일 기반 결정론"으로 처리. ① 수집(Export): 마켓별 신발·의류 카테고리 전체(카탈로그: 경로+코드+구분) + 리프(매핑대상)를 엑셀로 내려받음. ② 매핑: Claude가 그 엑셀을 받아 규칙대로 각 리프×마켓에 카탈로그 경로를 채움. ③ 적용(Apply): 매핑 엑셀을 불러오면 카탈로그로 경로→코드를 해석해 리프마다 설정페이지에서 주입·고시·저장(fetch-POST)·되읽기 검증. 규칙이 매크로에서 빠져 Claude 판단으로 이동 → 신상품마다 정규식 손볼 필요 없음.
 // @match        https://tmg4682.mycafe24.com/mall/admin/admin_category_new.php*
 // @match        https://tmg4682.mycafe24.com/mall/admin/admin_category_set.php*
 // @require      https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js
@@ -26,27 +26,71 @@ var LABEL2M={}; MARKETS.forEach(function(m){ LABEL2M[MLABEL[m]]=m; });
 var USE_MARKET_DEFAULT='["AUC20","GMK20","11ST","SMART","COUP","LTON","LFMALL","MUSTIT","SHOPEE","QOO10JP","SHOPIFY","CAFE24","GODO","IMWEB","PLAYAUTO"]';
 var ENGLISH_MARKETS={SHOPEE:1, MUSTIT:1, QOO10JP:1};
 
-// 카탈로그 스윕 키워드(마켓 무관 union; 안 맞는 건 빈 결과)
-var SWEEP_KR=['남성화','여성화','신발','슈즈','운동화','스니커즈','부츠','워커','샌들','슬리퍼','구두','로퍼','힐','펌프스','플랫','모카신','아쿠아','골프화','등산화','트레킹','워킹화','러닝화','농구화','테니스화','캔버스','슬립온','뮬','장화','부티'];
-var SWEEP_EN=['shoes','boots','sneakers','sandals','loafers','heels','flats','slippers','oxford','pumps','mule'];
+// =========================================================================
+// 카탈로그 스윕 키워드 + 신발/의류 분류
+//  v2.1: 의류 리프(MEN-의류/WOMEN-의류)가 추가돼 "신발 전용" 수집·정제로는 커버 불가 →
+//        스윕 키워드에 의류군을 추가하고, 정제기를 '신발|의류' 2종 분류기로 교체.
+// =========================================================================
+var SWEEP_SHOE_KR=['남성화','여성화','신발','슈즈','운동화','스니커즈','부츠','워커','샌들','슬리퍼','구두','로퍼','힐','펌프스','플랫','모카신','아쿠아','골프화','등산화','트레킹','워킹화','러닝화','농구화','테니스화','캔버스','슬립온','뮬','장화','부티'];
+var SWEEP_SHOE_EN=['shoes','boots','sneakers','sandals','loafers','heels','flats','slippers','oxford','pumps','mule'];
+var SWEEP_APPAREL_KR=['남성의류','여성의류','의류','티셔츠','셔츠','블라우스','니트','스웨터','가디건','후드','맨투맨','조끼','베스트','자켓','재킷','점퍼','패딩','코트','플리스','바지','팬츠','청바지','데님','반바지','스커트','치마','원피스','레깅스','정장','민소매','트레이닝','홈웨어','아우터','상의','하의'];
+var SWEEP_APPAREL_EN=['t-shirt','shirts','knit','hoodie','sweatshirt','cardigan','jacket','coat','pants','jeans','shorts','skirt','dress','leggings','vest','outerwear'];
+// 하위호환(구 변수명을 참조하는 코드/메모용)
+var SWEEP_KR=SWEEP_SHOE_KR, SWEEP_EN=SWEEP_SHOE_EN;
 
-// 카탈로그 정제(비-신발/금지 카테고리 제외)
-var FORBIDDEN=/(어린이|유아|아동|키즈|주니어|도서|서적|e쿠폰|모바일|렌탈|배달음식|출산|육아|임산부|위생용품|의료기기|의약품|Baby|Kids|Toddler|Children)/i;
+// 수집 범위(패널에서 선택): '신발+의류'(기본) | '신발' | '의류'
+var SCOPE_LS='tmg_catscope_v1';
+function catScope(){ try{ var v=localStorage.getItem(SCOPE_LS); return (v==='신발'||v==='의류')?v:'신발+의류'; }catch(e){ return '신발+의류'; } }
+function sweepWords(m){
+  var sc=catScope(), en=!!ENGLISH_MARKETS[m], out=[];
+  if(sc!=='의류'){ out=out.concat(SWEEP_SHOE_KR); if(en) out=out.concat(SWEEP_SHOE_EN); }
+  if(sc!=='신발'){ out=out.concat(SWEEP_APPAREL_KR); if(en) out=out.concat(SWEEP_APPAREL_EN); }
+  return out;
+}
+function inScope(kind){ var sc=catScope(); return !!kind && (sc==='신발+의류' || sc===kind); }
+
+// --- 정제 규칙 ---
+var FORBIDDEN=/(어린이|유아|아동|키즈|주니어|남아|여아|도서|서적|e쿠폰|모바일|렌탈|배달음식|출산|육아|임산부|위생용품|의료기기|의약품|Baby|Kids|Toddler|Children|Junior)/i;
 var PET=/(반려|애완|강아지|고양이|반려동물|\bPets?\b)/i;
 var BEAUTY=/(화장품|미용|헤어|파마|스킨케어|메이크업)/;
-// 신발 리프 허용목록(신발 어휘) + 금지목록(신발장/가방/모자/벨트/끈/탈취제 등)
-var FOOT_LEAF=/화$|슈즈|신발|부츠|부티|샌들|슬리퍼|슬립온|로퍼|힐|펌프스|플랫|워커|더비|구두|뮬|블로퍼|모카신|옥스[퍼포]드|스니커|아쿠아|장화|크록스|덧신|니하이|shoe|boot|sneaker|sandal|loafer|heel|pump|flat|mule|oxford|derby|slipper|clog/i;
-var JUNK_CAT=/신발장|정리함|수납|주머니|골프백|가방|백팩|에코백|크로스백|숄더백|토트백|파우치|캐리어|지갑|벨트|모자|캡모자|비니|장갑|스카프|머플러|넥워머|목걸이|팔찌|우산|양산|양말|삭스|신발끈|운동화끈|깔창|인솔|커버|클리너|탈취|방향|제습|건조|세탁|걸이|보관|관리용품|의류|트레이닝복|바지|팬츠|치마|원피스|재킷|코트|점퍼|니트|스웨터|가디건|풀오버|블라우스/;
+// ★루트(1단계) 도메인 차단: 신발/의류가 있을 수 없는 대분류를 통째로 배제 → '게임>시뮬레이션'(뮬), '욕실>샤워커튼'(워커) 류 오탐 원천 차단
+var BAD_ROOT=/(게임|장난감|과자|간식|식품|음료|건강식품|가전|디지털|컴퓨터|노트북|휴대폰|카메라|자동차|오토바이|스쿠터|자전거|가구|인테리어|주방|생활|세제|제지|일용|수납|정리|욕실|청소|문구|공구|악기|도서|음반|CD|DVD|티켓|상품권|여행|항공|호텔|전동레저|낚시|수영|손발건강|의료|반려|플라워|화훼|오피스|산업)/;
+// ★단, 루트에 패션 어휘가 함께 있으면 차단하지 않음(예: '등산/캠핑/낚시/보드 > 등산화', '자전거/헬스/스포츠 > 농구화')
+var GOOD_ROOT=/신발|슈즈|의류|패션|구두|운동화|스니커|부츠|등산|아웃도어|명품|브랜드|잡화|스포츠|shoes?|clothes|apparel|fashion|men|women/i;
+// ★리프(±상위)가 특수 목적군이면 배제 — 낚시복/스쿠버/스키부츠/자전거화/레이싱슈즈 등
+var NICHE_WORD=/낚시|스킨스쿠버|다이빙|잠수|스노보드|^스키$|스키장비|자전거|사이클|오토바이|바이크|모터싸이클|스쿠터|롤러|인라인|승마|볼링|사격|레이싱|웨이크보드|청소|욕실|주방|한복|교복|유니폼|작업복/;
+// 신발·의류 '본품'이 아닌 부속/잡화 리프
+var ACC_JUNK=/신발장|정리함|수납|주머니|골프백|가방|백팩|에코백|크로스백|숄더백|토트백|파우치|캐리어|지갑|벨트|모자|캡모자|비니|장갑|스카프|머플러|넥워머|목걸이|팔찌|우산|양산|양말|삭스|스타킹|신발끈|운동화끈|깔창|인솔|^커버$|클리너|탈취|방향제|제습|건조기|세탁|걸이|보관|관리용품|용품|소품|구두약|구두솔|구둣?주걱|슈트리|제골기|부츠키퍼|보호쿠션|해먹|거치대|스프레이|^브러쉬$|^스펀지$|염색제|상품권|리폼|집게|정리대|케어/;
+
+// 토큰 단위 매칭(짧은 어휘의 부분일치 오탐 방지: '시뮬레이션'의 뮬, '샤워커튼'의 워커, '부츠컷'의 부츠)
+function tokens(seg){ return String(seg).split(/[\s/·,()>\[\]&・\-]+/).filter(Boolean); }
+var FOOT_WORD=/화$|슈즈|신발|부츠$|부티|샌들|슬리퍼|슬립온|로퍼|힐$|하이힐|펌프스|^플랫(슈즈|폼)?$|플랫$|^워커|워커$|더비|구두|^뮬$|뮬$|블로퍼|모카신|옥스[퍼포]드|스니커|아쿠아슈즈|^아쿠아$|장화|크록스|덧신|니하이|싸이하이|^조리$|쪼리|플립플[랍롭]|웨지|토오픈|슬링백|에스파드|발레리나|메리제인|웰트화|shoes?$|boots?$|sneakers?|sandals?|loafers?|heels?$|pumps?$|flats?$|mules?$|oxfords?|derby|slippers?|clogs?|espadrille/i;
+var APPAREL_WORD=/^의류$|의류$|^상의$|^하의$|상하의|아우터|티셔츠|티셔트|반팔|긴팔|셔츠|남방|블라우스|니트|스웨터|가디건|카디건|풀오버|후드|맨투맨|스웻|트레이닝복|운동복|자켓|재킷|점퍼|블루종|패딩|덕다운|구스다운|코트$|조끼|베스트$|플리스|후리스|바지|팬츠|슬랙스|데님|스커트|치마|원피스|점프수트|레깅스|^정장$|정장바지|수트$|슈트$|민소매|나시|셋업|홈웨어|잠옷|파자마|래쉬가드|집업|숏패딩|롱패딩|tshirts?$|t-shirts?$|shirts?$|blouse|knit|sweater|cardigan|hoodie|sweatshirt|jackets?$|coats?$|vest$|fleece|pants$|trousers|jeans|shorts$|skirts?$|dress(es)?$|leggings|outerwear|jumper/i;
+function anyWord(re, segs){ for(var i=0;i<segs.length;i++){ var tk=tokens(segs[i]); for(var j=0;j<tk.length;j++){ if(re.test(tk[j])) return true; } } return false; }
 var ELEVEN_OVERSEAS=/해외/;   // ★단계형(ABC=국내 사업자): 11번가는 국내 카테고리여야 함 — 경로에 '해외'가 있으면 규칙위반
 function leafSeg(t){ return (String(t).split('>').pop()||'').trim(); }
-function isFootwearCat(t){
-  if(!t || t.indexOf('>')<0) return false;
-  if(FORBIDDEN.test(t)||PET.test(t)||BEAUTY.test(t)) return false;
+// 카테고리 경로 → '신발' | '의류' | ''(해당없음)
+function catKind(t){
+  if(!t || t.indexOf('>')<0) return '';
+  if(FORBIDDEN.test(t)||PET.test(t)||BEAUTY.test(t)) return '';
   var sg=String(t).split('>').map(function(x){return x.trim();});
-  var leaf=sg[sg.length-1], last2=sg.slice(-2).join(' ');
-  if(JUNK_CAT.test(leaf)) return false;      // 신발장/가방/벨트/끈/탈취제 등 제외
-  if(!FOOT_LEAF.test(last2)) return false;    // 리프(±상위)에 신발 어휘 필수
-  return true;
+  if(BAD_ROOT.test(sg[0]) && !GOOD_ROOT.test(sg[0])) return '';
+  if(ACC_JUNK.test(sg[sg.length-1])) return '';
+  var last2=sg.slice(-2), last3=sg.slice(-3);
+  if(anyWord(NICHE_WORD, last2)) return '';
+  if(anyWord(FOOT_WORD, last2)) return '신발';    // 신발 어휘 우선(예: '정장구두'는 의류 아님)
+  if(anyWord(APPAREL_WORD, last3)) return '의류'; // 의류는 트리가 깊어 상위 1단계 더 봄(예: '… > 청바지 > 부츠컷 > 남성용')
+  return '';
+}
+function isFootwearCat(t){ return catKind(t)==='신발'; }   // 하위호환
+// 리프 경로명 → '신발' | '의류' | ''   (예: '남성 의류 상의 후드', '신발 스니커즈 슬립온')
+function leafKind(name){
+  var n=String(name||'');
+  if(/(^|\s)의류(\s|$)/.test(n)) return '의류';
+  if(/(^|\s)신발(\s|$)/.test(n)) return '신발';
+  if(anyWord(FOOT_WORD,[n])) return '신발';
+  if(anyWord(APPAREL_WORD,[n])) return '의류';
+  return '';
 }
 
 function gs(){ try{ return JSON.parse(localStorage.getItem(LS))||null; }catch(e){ return null; } }
@@ -141,7 +185,7 @@ async function marketInfo11st(kw, sellerType){
   return arr.map(function(s){ var p=String(s).split('@'); return {t:p.slice(2).join('@'), v:p[0]}; });
 }
 async function sweepMarket(m, elevenType, onProg){
-  var kws=SWEEP_KR.concat(ENGLISH_MARKETS[m]?SWEEP_EN:[]);
+  var kws=sweepWords(m);
   var seen={}, cat=[];
   for(var i=0;i<kws.length;i++){
     if(onProg) onProg(i+1, kws.length);
@@ -149,8 +193,9 @@ async function sweepMarket(m, elevenType, onProg){
     if(m==='11ST'){ r=await marketInfo11st(kws[i], elevenType==='해외'?'1':'2'); }   // ★11ST만 엔드포인트 직접 호출(국내=2/해외=1)
     else { r=await searchWait(m, kws[i]); }
     r.forEach(function(o){
-      if(seen[o.v] || !isFootwearCat(o.t)) return;
-      seen[o.v]=1; cat.push({path:o.t, code:o.v});
+      if(seen[o.v]) return;
+      var k=catKind(o.t); if(!inScope(k)) return;
+      seen[o.v]=1; cat.push({path:o.t, code:o.v, kind:k});
     });
   }
   cat.sort(function(a,b){ return a.path<b.path?-1:1; });
@@ -170,17 +215,22 @@ async function waitNotifyGroups(timeout){
   while(Date.now()-t0<(timeout||9000)){ var pend=marketsNeedingGroup().filter(function(m){ return !groupSet(m); }); if(!pend.length) return true; await sleep(600); }
   return false;
 }
-function shoeGroupPrefs(name){
-  if(/신발|슈즈|구두|부츠|샌들|스니커즈|운동화|로퍼|힐|슬리퍼|워커|플랫/.test(name||'')) return ['구두/신발','신발','구두','패션잡화','기타 재화'];
+// ★고시 상품군: 의류 리프는 '의류' 고시군을 골라야 함(신발 고시군을 쓰면 고시정보 오기재)
+function notifyGroupPrefs(name){
+  var k=leafKind(name);
+  if(k==='의류') return ['의류','패션의류','의류/패션','섬유·의류','기타 재화'];
+  if(k==='신발') return ['구두/신발','신발','구두','패션잡화','기타 재화'];
   return ['패션잡화','잡화','기타 재화'];
 }
+function shoeGroupPrefs(name){ return notifyGroupPrefs(name); }   // 하위호환
 function ensureNotifyGroups(name){
-  var prefs=shoeGroupPrefs(name); var setM=[];
+  var prefs=notifyGroupPrefs(name); var setM=[];
+  var fb=(leafKind(name)==='의류') ? /의류|패션|기타\s*재화/ : /구두|신발|잡화|기타\s*재화/;
   marketsNeedingGroup().forEach(function(m){
     var g=document.getElementById('notify_group_no_'+m); if(!g || g.value) return;
     var idx=-1;
     for(var p=0;p<prefs.length && idx<0;p++){ for(var i=0;i<g.options.length;i++){ if((g.options[i].text||'').trim()===prefs[p]){ idx=i; break; } } }
-    if(idx<0){ for(var j=0;j<g.options.length;j++){ if(/구두|신발|잡화|기타\s*재화/.test(g.options[j].text||'')){ idx=j; break; } } }
+    if(idx<0){ for(var j=0;j<g.options.length;j++){ if(fb.test(g.options[j].text||'')){ idx=j; break; } } }
     if(idx<0){ for(var k=0;k<g.options.length;k++){ if(g.options[k].value){ idx=k; break; } } }
     if(idx>=0){ g.selectedIndex=idx; g.dispatchEvent(new Event('change',{bubbles:true})); setM.push(m); }
   });
@@ -217,8 +267,8 @@ async function runExport(){
   var pending=gs(); var siteName=(pending&&pending.siteName)||'ABCmart';
   var leaves=(pending&&pending.leaves)||[];
   if(!leaves.length){ setStat('리프 목록이 비어있습니다. 트리 페이지에서 다시 시작하세요.'); return; }
-  var elevenType=eleven11Type();
-  setStat('리프 '+leaves.length+'개. 마켓 카탈로그 수집 중... (11번가='+elevenType+')');
+  var elevenType=eleven11Type(); var scope=catScope();
+  setStat('리프 '+leaves.length+'개. 마켓 카탈로그 수집 중... (11번가='+elevenType+' · 범위='+scope+')');
   var catalog={};
   for(var mi=0; mi<MARKETS.length; mi++){
     var m=MARKETS[mi];
@@ -228,20 +278,21 @@ async function runExport(){
   // --- 워크북 작성 ---
   var wb=XLSX.utils.book_new();
   // 카탈로그 시트
-  var catAoa=[['마켓','카테고리경로','코드']];
-  MARKETS.forEach(function(m){ (catalog[m]||[]).forEach(function(c){ catAoa.push([MLABEL[m], c.path, String(c.code)]); }); });
+  var catAoa=[['마켓','카테고리경로','코드','구분']];   // ★구분(신발/의류) 추가: Claude가 리프 유형과 교차매핑하지 않도록
+  MARKETS.forEach(function(m){ (catalog[m]||[]).forEach(function(c){ catAoa.push([MLABEL[m], c.path, String(c.code), c.kind||'']); }); });
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(catAoa), '카탈로그');
   // 매핑 시트(리프 행 + 빈 마켓 열 = Claude가 채움)
-  var mapHead=['리프ID','경로명','성별'].concat(MARKETS.map(function(m){return MLABEL[m];}));
+  var mapHead=['리프ID','경로명','성별','구분'].concat(MARKETS.map(function(m){return MLABEL[m];}));
   var mapAoa=[mapHead];
-  leaves.forEach(function(l){ mapAoa.push([l.id, l.name, genderOf(l.name)].concat(MARKETS.map(function(){return '';}))); });
+  leaves.forEach(function(l){ mapAoa.push([l.id, l.name, genderOf(l.name), leafKind(l.name)].concat(MARKETS.map(function(){return '';}))); });
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(mapAoa), '매핑');
-  // 설정 시트: 이 카탈로그가 어떤 11번가 종류로 수집됐는지 기록 → 적용 단계가 같은 종류로 라디오 세팅
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['항목','값'],['11번가카테고리종류', elevenType]]), '설정');
-  var fname='카테고리매핑_'+siteName.replace(/[^\w가-힣.]/g,'')+'_11번가'+elevenType+'_'+stampNow()+'.xlsx';
+  // 설정 시트: 이 카탈로그가 어떤 11번가 종류/수집범위로 수집됐는지 기록 → 적용 단계가 같은 종류로 라디오 세팅
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['항목','값'],['11번가카테고리종류', elevenType],['수집범위', scope]]), '설정');
+  var fname='카테고리매핑_'+siteName.replace(/[^\w가-힣.]/g,'')+'_11번가'+elevenType+'_'+scope.replace('+','')+'_'+stampNow()+'.xlsx';
   XLSX.writeFile(wb, fname);
   var total=MARKETS.reduce(function(s,m){return s+(catalog[m]?catalog[m].length:0);},0);
-  setStat('엑셀 내보냄: '+fname+' — 카탈로그 '+total+'건 · 리프 '+leaves.length+'개 · 11번가='+elevenType+'. 이 파일을 Claude에게 주고 매핑 시트를 채워 오세요.');
+  var nShoe=0,nApp=0; MARKETS.forEach(function(m){ (catalog[m]||[]).forEach(function(c){ if(c.kind==='의류') nApp++; else nShoe++; }); });
+  setStat('엑셀 내보냄: '+fname+' — 카탈로그 '+total+'건(신발 '+nShoe+' · 의류 '+nApp+') · 리프 '+leaves.length+'개 · 11번가='+elevenType+'. 이 파일을 Claude에게 주고 매핑 시트를 채워 오세요.');
   clr();
 }
 
@@ -253,27 +304,40 @@ function parseMappingWorkbook(wb){
   var catRows=sheet('카탈로그'); var mapRows=sheet('매핑');
   if(!catRows||!mapRows) throw new Error('시트(카탈로그/매핑)를 찾지 못했습니다.');
   // 설정 시트에서 11번가 종류 읽기(구 엑셀엔 없으면 국내로 간주)
-  var setRows=sheet('설정'); var elevenType='국내';
-  if(setRows){ for(var si=0;si<setRows.length;si++){ if(String(setRows[si][0]).indexOf('11번가')>=0){ elevenType=(String(setRows[si][1]).indexOf('해외')>=0)?'해외':'국내'; } } }
-  // 카탈로그: {marketCode: {path: code}}
-  var catalog={}; MARKETS.forEach(function(m){ catalog[m]={}; });
-  for(var i=1;i<catRows.length;i++){ var r=catRows[i]; var mc=LABEL2M[String(r[0]).trim()]; if(!mc) continue; var path=String(r[1]).trim(); var code=String(r[2]).trim(); if(path&&code) catalog[mc][path]=code; }
+  var setRows=sheet('설정'); var elevenType='국내'; var scope='';
+  if(setRows){ for(var si=0;si<setRows.length;si++){
+    var k0=String(setRows[si][0]);
+    if(k0.indexOf('11번가')>=0){ elevenType=(String(setRows[si][1]).indexOf('해외')>=0)?'해외':'국내'; }
+    if(k0.indexOf('수집범위')>=0){ scope=String(setRows[si][1]||'').trim(); }
+  } }
+  // 카탈로그: {marketCode: {path: code}} + 구분맵 {marketCode: {path: '신발'|'의류'}}
+  var catalog={}, catKindMap={}; MARKETS.forEach(function(m){ catalog[m]={}; catKindMap[m]={}; });
+  for(var i=1;i<catRows.length;i++){
+    var r=catRows[i]; var mc=LABEL2M[String(r[0]).trim()]; if(!mc) continue;
+    var path=String(r[1]).trim(); var code=String(r[2]).trim();
+    if(!path||!code) continue;
+    catalog[mc][path]=code;
+    catKindMap[mc][path]=String(r[3]||'').trim() || catKind(path);   // 구분 열 없는 구 엑셀은 경로로 판정
+  }
   // 매핑: 헤더로 마켓 열 인덱스 찾기
   var head=mapRows[0].map(function(x){return String(x).trim();});
   var idIdx=head.indexOf('리프ID'), nameIdx=head.indexOf('경로명');
   var mCol={}; MARKETS.forEach(function(m){ mCol[m]=head.indexOf(MLABEL[m]); });
-  var queue=[]; var rejected=[];
+  var queue=[]; var rejected=[]; var warnings=[];
   for(var j=1;j<mapRows.length;j++){
     var row=mapRows[j]; var id=String(row[idIdx]||'').trim(); if(!/^\d{18}$/.test(id)) continue;
     var leafName=String(row[nameIdx]||'').trim();
+    var lk=leafKind(leafName);
     var map={}; MARKETS.forEach(function(m){
       var ci=mCol[m]; var val=ci>=0?String(row[ci]||'').trim():''; if(!val) return;
       if(m==='11ST' && elevenType==='국내' && ELEVEN_OVERSEAS.test(val)){ rejected.push(leafName+' — 11번가 "'+val+'"(해외 경로 · 선택=국내 → 건너뜀)'); return; }  // ★선택종류(국내)와 어긋나는 해외 경로는 반영 안 함(기존값 유지)
+      var ck=catKindMap[m][val];
+      if(lk && ck && ck!==lk) warnings.push(leafName+' ('+lk+') → '+MLABEL[m]+' "'+val+'" ('+ck+')');   // ★신발↔의류 교차매핑 경고(적용은 진행)
       map[m]=val;
     });
     if(Object.keys(map).length) queue.push({ id:id, name:leafName, map:map });  // 매핑이 지정된 리프만 처리(빈 리프 건너뜀)
   }
-  return { catalog:catalog, queue:queue, rejected:rejected, elevenType:elevenType };
+  return { catalog:catalog, queue:queue, rejected:rejected, warnings:warnings, elevenType:elevenType, scope:scope };
 }
 function setUrl(item){ return DIR()+'admin_category_set.php?category_id='+item.id+'&ps_uid='+(item.psUid||'new')+'&tm='; }
 
@@ -366,20 +430,23 @@ async function runReadback(){
   setStat('['+site.name+'] 되읽기 — 리프 열거...');
   var leaves; try{ leaves=await enumerateLeaves(site.short); }catch(e){ setStat('탐색 실패: '+e.message); return; }
   for(var bi=0;bi<leaves.length;bi+=8){ var batch=leaves.slice(bi,bi+8); var infos=await Promise.all(batch.map(function(l){return leafInfo(l.id);})); infos.forEach(function(inf,j){ batch[j].psUid=inf.psUid; }); setStat('매핑상태 확인 '+Math.min(bi+8,leaves.length)+'/'+leaves.length); }
-  var INVALID=/변경해\s*주세요/; var wantType=eleven11Type(); var flags=[]; var cols=['리프ID','경로명','성별'].concat(MARKETS.map(function(m){return MLABEL[m];}));
-  // 11ST 코드→경로 맵 준비(선택 종류로)
-  _map11={}; try{ var stv=(wantType==='해외')?'1':'2'; for(var ki=0;ki<SWEEP_KR.length;ki++){ var a11=await marketInfo11st(SWEEP_KR[ki], stv); a11.forEach(function(o){ _map11[o.v]=o.t; }); } }catch(e){}
+  var INVALID=/변경해\s*주세요/; var wantType=eleven11Type(); var flags=[]; var cols=['리프ID','경로명','성별','구분'].concat(MARKETS.map(function(m){return MLABEL[m];}));
+  // 11ST 코드→경로 맵 준비(선택 종류 + 선택 범위로)
+  _map11={}; try{ var stv=(wantType==='해외')?'1':'2'; var kw11=sweepWords('11ST'); for(var ki=0;ki<kw11.length;ki++){ var a11=await marketInfo11st(kw11[ki], stv); a11.forEach(function(o){ _map11[o.v]=o.t; }); } }catch(e){}
   var csv='﻿'+cols.map(csvq).join(',')+'\n';
   for(var i=0;i<leaves.length;i++){
     setStat('실제 저장값 읽는 중 '+(i+1)+'/'+leaves.length+' — '+leaves[i].name);
     var ch; try{ ch=await scanLeafActual(leaves[i].id, leaves[i].psUid); }catch(e){ ch={}; }
-    var row=[leaves[i].id, leaves[i].name, genderOf(leaves[i].name)].concat(MARKETS.map(function(m){ return ch[MLABEL[m]]||''; }));
+    var lk=leafKind(leaves[i].name);   // ★리프가 신발인지 의류인지에 따라 기대 유형이 달라짐
+    var row=[leaves[i].id, leaves[i].name, genderOf(leaves[i].name), lk].concat(MARKETS.map(function(m){ return ch[MLABEL[m]]||''; }));
     csv+=row.map(csvq).join(',')+'\n';
     MARKETS.forEach(function(m){ var v=ch[MLABEL[m]]||'';
       if(!v){ flags.push([leaves[i].name,MLABEL[m],'미매핑']); return; }
       if(INVALID.test(v)){ flags.push([leaves[i].name,MLABEL[m],'사이트무효']); return; }
       if(m==='11ST'){ if(ch.__11stType && ch.__11stType!==wantType) flags.push([leaves[i].name,MLABEL[m],'규칙위반-11번가'+ch.__11stType+'(선택='+wantType+'여야함)']); return; }   // 11ST는 저장타입(국내/해외)만 검증
-      if(!isFootwearCat(v)) flags.push([leaves[i].name,MLABEL[m],'비-신발오분류:'+v]); });
+      var vk=catKind(v);
+      if(!vk){ flags.push([leaves[i].name,MLABEL[m],'비-신발/의류 오분류:'+v]); return; }
+      if(lk && vk!==lk) flags.push([leaves[i].name,MLABEL[m],'유형불일치('+lk+'리프에 '+vk+'카테고리):'+v]); });
     if(i%10===9) await sleep(80);
   }
   var stamp=stampNow(); var tag=site.name.replace(/[^\w가-힣.]/g,'');
@@ -401,6 +468,7 @@ function panelTree(){
   p.innerHTML='<div style="font-weight:bold;margin-bottom:6px">카테고리매핑 · 파일기반 v2</div>'
    +'<div style="margin-bottom:4px">사이트: <select id="tmgSite">'+opts+'</select></div>'
    +'<div style="margin-bottom:4px">11번가 카테고리: <select id="tmg11stType"><option value="국내">국내</option><option value="해외">해외</option></select> <span style="color:#888;font-size:11px">ABC마트=국내</span></div>'
+   +'<div style="margin-bottom:4px">수집 범위: <select id="tmgScope"><option value="신발+의류">신발+의류</option><option value="신발">신발만</option><option value="의류">의류만</option></select> <span style="color:#888;font-size:11px">의류 포함 시 수집 2배</span></div>'
    +'<div style="margin-bottom:6px;border-top:1px solid #eee;padding-top:6px"><b>① 수집(Export)</b><br><button id="tmgExport">카탈로그+대상 엑셀 내보내기</button><br><span style="color:#888;font-size:11px">마켓 검색이 필요해 설정페이지로 이동해 수집합니다.</span></div>'
    +'<div style="margin-bottom:6px;border-top:1px solid #eee;padding-top:6px"><b>③ 적용(Apply)</b><br><input type="file" id="tmgFile" accept=".xlsx"><br><button id="tmgApply">매핑파일대로 적용 시작</button> <button id="tmgStop" style="color:#d9534f">정지</button></div>'
    +'<div style="border-top:1px solid #eee;padding-top:6px"><button id="tmgEval">실제 저장값 되읽기 검증</button></div>'
@@ -408,8 +476,9 @@ function panelTree(){
    +'<div style="margin-top:6px;color:#888;font-size:11px">순서: ①엑셀 내보내기 → Claude가 매핑 시트 채움 → ③그 엑셀 불러와 적용 → 되읽기 검증.</div>';
   document.body.appendChild(p);
   var t11=q('#tmg11stType'); if(t11){ t11.value=eleven11Type(); t11.onchange=function(){ try{ localStorage.setItem(ELEVEN_TYPE_LS, t11.value==='해외'?'해외':'국내'); }catch(e){} setStat('11번가 카테고리 종류 = '+t11.value+' (수집·적용·평가에 반영)'); }; }
+  var sc=q('#tmgScope'); if(sc){ sc.value=catScope(); sc.onchange=function(){ try{ localStorage.setItem(SCOPE_LS, sc.value); }catch(e){} setStat('수집 범위 = '+sc.value+' (수집·되읽기 검증에 반영)'); }; }
   q('#tmgExport').onclick=async function(){ var s=q('#tmgSite'); var sites=listSites(); var site=sites.filter(function(x){return x.short===s.value;})[0]||sites[0]; if(!site){ setStat('사이트 없음'); return; } setStat('['+site.name+'] 리프 열거 중...'); var leaves; try{ leaves=await enumerateLeaves(site.short); }catch(e){ setStat('리프 열거 실패: '+e.message); return; } if(!leaves.length){ setStat('리프 없음'); return; } var first=leaves[0]; var inf=await leafInfo(first.id); ss({mode:'export', siteShort:site.short, siteName:site.name, leaves:leaves}); setStat('설정페이지로 이동해 카탈로그 수집을 시작합니다...'); location.href=DIR()+'admin_category_set.php?category_id='+first.id+'&ps_uid='+inf.psUid+'&tm='; };
-  q('#tmgApply').onclick=function(){ var f=q('#tmgFile').files[0]; if(!f){ setStat('먼저 매핑 엑셀(.xlsx)을 선택하세요.'); return; } var rd=new FileReader(); rd.onload=async function(e){ try{ var wb=XLSX.read(new Uint8Array(e.target.result),{type:'array'}); var pr=parseMappingWorkbook(wb); if(!pr.queue.length){ setStat('매핑 시트에서 유효한 리프 행을 못 찾았습니다.'); return; } var rejMsg=(pr.rejected&&pr.rejected.length)?('\n\n※ 11번가 해외 매핑 '+pr.rejected.length+'건은 건너뜁니다(선택=국내):\n'+pr.rejected.slice(0,10).join('\n')+(pr.rejected.length>10?'\n...':'')):''; if(!_nativeConfirm('매핑 적용을 시작합니다.\n리프 '+pr.queue.length+'개 · 카탈로그 로드됨 · 11번가='+pr.elevenType+'.\n설정페이지를 순차 이동하며 저장합니다. 시작할까요?'+rejMsg)){ setStat('취소됨'); return; } setStat('첫 리프 상태 확인 중...'); var inf0=await leafInfo(pr.queue[0].id); pr.queue[0].psUid=inf0.psUid; ss({mode:'apply', running:true, idx:0, ok:0, fail:0, queue:pr.queue, catalog:pr.catalog, elevenType:pr.elevenType, log:[]}); setStat('적용 시작 — 리프 '+pr.queue.length+'개'); location.href=setUrl(pr.queue[0]); }catch(err){ setStat('엑셀 파싱 실패: '+(err&&err.message||err)); } }; rd.readAsArrayBuffer(f); };
+  q('#tmgApply').onclick=function(){ var f=q('#tmgFile').files[0]; if(!f){ setStat('먼저 매핑 엑셀(.xlsx)을 선택하세요.'); return; } var rd=new FileReader(); rd.onload=async function(e){ try{ var wb=XLSX.read(new Uint8Array(e.target.result),{type:'array'}); var pr=parseMappingWorkbook(wb); if(!pr.queue.length){ setStat('매핑 시트에서 유효한 리프 행을 못 찾았습니다.'); return; } if(pr.scope){ try{ localStorage.setItem(SCOPE_LS, pr.scope); }catch(e){} } var rejMsg=(pr.rejected&&pr.rejected.length)?('\n\n※ 11번가 해외 매핑 '+pr.rejected.length+'건은 건너뜁니다(선택=국내):\n'+pr.rejected.slice(0,10).join('\n')+(pr.rejected.length>10?'\n...':'')):''; var warnMsg=(pr.warnings&&pr.warnings.length)?('\n\n⚠ 신발↔의류 교차매핑 의심 '+pr.warnings.length+'건(그대로 적용됩니다 — 취소 후 엑셀 수정 권장):\n'+pr.warnings.slice(0,10).join('\n')+(pr.warnings.length>10?'\n...':'')):''; if(!_nativeConfirm('매핑 적용을 시작합니다.\n리프 '+pr.queue.length+'개 · 카탈로그 로드됨 · 11번가='+pr.elevenType+(pr.scope?(' · 범위='+pr.scope):'')+'.\n설정페이지를 순차 이동하며 저장합니다. 시작할까요?'+rejMsg+warnMsg)){ setStat('취소됨'); return; } setStat('첫 리프 상태 확인 중...'); var inf0=await leafInfo(pr.queue[0].id); pr.queue[0].psUid=inf0.psUid; ss({mode:'apply', running:true, idx:0, ok:0, fail:0, queue:pr.queue, catalog:pr.catalog, elevenType:pr.elevenType, log:[]}); setStat('적용 시작 — 리프 '+pr.queue.length+'개'); location.href=setUrl(pr.queue[0]); }catch(err){ setStat('엑셀 파싱 실패: '+(err&&err.message||err)); } }; rd.readAsArrayBuffer(f); };
   q('#tmgStop').onclick=function(){ var s=gs(); if(s){ s.running=false; ss(s); } setStat('정지 요청됨.'); };
   q('#tmgEval').onclick=function(){ runReadback(); };
 }

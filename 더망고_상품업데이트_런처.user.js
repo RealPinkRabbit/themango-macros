@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         더망고 상품업데이트 런처
 // @namespace    solddeul.tmg
-// @version      1.9.1
-// @description  상품업데이트&마켓전송 화면의 설정(수집사이트/업데이트항목/전송마켓/변동일/범위)을 프리셋으로 저장해 두고, 범위를 구간으로 나눠 여러 창을 한꺼번에 띄운다. v1.6부터 구간은 최대 5개다(동시 5창 한도) — 1~4구간은 지정한 크기대로 끊고 5번째가 남은 전량을 맡는다. v1.7에 [실행+예약]을 추가했다 — 창을 미리 열어 두고 프리셋의 '예약' 시각이 되면 대조를 다시 한 뒤 스스로 시작한다. 구간마다 전송마켓을 따로 지정할 수 있다. 새로 열린 창은 프리셋과 실제 화면을 대조해 일치할 때만 시작 버튼을 열어 준다. [실행]은 창만 열고 사람이 시작을 누르며, [실행+자동시작]은 확인창 1회를 거쳐 각 창이 대조 통과 후 스스로 시작한다. v1.4부터 런처가 연 창에서는 더망고의 auto_repeat(자동 재시작)을 끈다. v1.5부터는 반복이 필요하면 런처가 직접 한다 — 프리셋에 '매일 HH:MM'을 지정하면 완료를 감지해 그 시각에 대조를 다시 하고 시작 버튼을 누른다. ★v1.9에서 반복 2회차가 늘 0건으로 끝나던 버그를 고쳤다 — 더망고의 회차 커서 초기화가 auto_repeat 블록 안에 들어 있어, v1.4가 반복을 끄면서 초기화까지 같이 꺼져 있었다. 시작 직전에 런처가 커서를 대신 되돌리고, 회차가 0건으로 끝나면 배너와 탭 제목으로 드러낸다.
+// @version      1.10.0
+// @description  상품업데이트&마켓전송 화면의 설정(수집사이트/업데이트항목/전송마켓/변동일/범위)을 프리셋으로 저장해 두고, 범위를 구간으로 나눠 여러 창을 한꺼번에 띄운다. v1.6부터 구간은 최대 5개다(동시 5창 한도) — 1~4구간은 지정한 크기대로 끊고 5번째가 남은 전량을 맡는다. v1.7에 [실행+예약]을 추가했다 — 창을 미리 열어 두고 프리셋의 '예약' 시각이 되면 대조를 다시 한 뒤 스스로 시작한다. 구간마다 전송마켓을 따로 지정할 수 있다. 새로 열린 창은 프리셋과 실제 화면을 대조해 일치할 때만 시작 버튼을 열어 준다. [실행]은 창만 열고 사람이 시작을 누르며, [실행+자동시작]은 확인창 1회를 거쳐 각 창이 대조 통과 후 스스로 시작한다. v1.4부터 런처가 연 창에서는 더망고의 auto_repeat(자동 재시작)을 끈다. v1.5부터는 반복이 필요하면 런처가 직접 한다 — 프리셋에 '매일 HH:MM'을 지정하면 완료를 감지해 그 시각에 대조를 다시 하고 시작 버튼을 누른다. ★v1.9에서 반복 2회차가 늘 0건으로 끝나던 버그를 고쳤다 — 더망고의 회차 커서 초기화가 auto_repeat 블록 안에 들어 있어, v1.4가 반복을 끄면서 초기화까지 같이 꺼져 있었다. 시작 직전에 런처가 커서를 대신 되돌리고, 회차가 0건으로 끝나면 배너와 탭 제목으로 드러낸다. ★v1.10에서 화면의 상세 검색조건(검색유형+검색어·마켓등록여부·날짜검색·상품상태·통화·가격/상품번호 범위 등)을 프리셋에 담을 수 있게 했다 — [현재 화면 조건 담기] 한 번이면 되고, 건수조회·구간분할·예약·반복·대조가 모두 그 조건을 따른다. 같은 수집사이트를 두 사업자가 나눠 쓰는 경우(검색필터명 검색으로 구분) 때문에 필요해졌다.
 // @match        https://tmg4682.mycafe24.com/mall/admin/admin_goods_update.php*
 // @run-at       document-idle
 // @grant        none
@@ -143,7 +143,8 @@ var MARKETS = [
 // 정렬은 uid_asc(상품수집 날짜순 과거순) 고정.
 // uid 기준이라 회차마다 순서가 흔들리지 않는다 → 구간이 매번 같은 대상을 가리킨다.
 var ORDER = 'uid_asc';
-// 상품상태는 화면 기본값과 같은 '판매상품(재고+품절)' 고정. 패널에서 다루지 않는다.
+// 상품상태의 기본값 = 화면 기본값과 같은 '판매상품(재고+품절)'.
+// ★ v1.10부터 프리셋의 검색조건(cond)에 ps_status가 담겨 있으면 그 값이 이긴다.
 var STATUS = 'sale';
 // 자동시작 창별 취소 유예(초). 부모에서 확인창을 이미 받았으므로 짧게 둔다.
 var AUTO_DELAY = 5;
@@ -159,6 +160,127 @@ function sleep(ms){ return new Promise(function(r){ setTimeout(r,ms); }); }
 function uid(){ return Date.now().toString(36) + Math.random().toString(36).slice(2,7); }
 function nameOf(list, v){ var f = list.filter(function(x){ return x.v === v; })[0]; return f ? f.t : v; }
 function names(list, arr){ return (arr||[]).map(function(v){ return nameOf(list, v); }).join(', '); }
+
+// ────────────────────────────────────────────────────────────
+// 검색조건(cond) — v1.10
+//
+// 화면 검색폼이 지원하는 상세 조건을 프리셋에 통째로 담는다. 패널에 항목을 하나씩
+// 복제하지 않고 [현재 화면 조건 담기]로 폼 상태를 그대로 가져오므로,
+// 더망고가 검색항목을 늘려도 코드를 고칠 필요가 없다.
+//
+// 이게 필요해진 이유: 같은 수집사이트(ABC마트)를 두 사업자가 나눠 쓴다.
+//   검색유형 '검색필터명 검색' + 검색어 '솔데글GL' / '솔데글KR' 로 갈린다
+//   (2026-09-04 실측: 전체 7,948 = GL 4,904 + KR 3,044 — 정확히 이분된다).
+//   'ps_market_id'에는 마켓×사업자계정(soldeglegl/soldeglekr)별 등록여부도 있다.
+//
+// ★ 담기에서 빼는 것 = 런처가 이미 자기 항목으로 갖고 있는 것. 소유자를 하나로 둔다.
+//   (수집사이트·전송마켓·업데이트항목·변동일은 패널 항목이, 정렬은 상수가 소유)
+var COND_SKIP = ['amode','pg','search_order','s_market','du_market','ps_site_id[]','ps_chd'];
+var COND_DATE = ['date_type','start_yy','start_mm','start_dd','end_yy','end_mm','end_dd'];
+var COND_LABEL = {
+  search_type:'검색유형', ps_subject:'검색어', goods_id_mode:'상품번호 검색방식',
+  ps_market_id:'마켓등록여부', ps_status:'상품상태', ps_currency:'통화',
+  ps_price_min:'원가 최소', ps_price_max:'원가 최대',
+  ps_gid_min:'상품번호 최소', ps_gid_max:'상품번호 최대',
+  ps_duse:'날짜검색 사용', date_type:'날짜종류',
+  start_yy:'시작 연', start_mm:'시작 월', start_dd:'시작 일',
+  end_yy:'끝 연', end_mm:'끝 월', end_dd:'끝 일'
+};
+
+// 폼에서 값을 읽는다. ★같은 이름이 여러 개인 경우가 있다(더망고 search_type = hidden + select).
+//   폼 제출·PHP와 같은 규칙으로 '마지막 값'을 쓴다.
+function fieldVal(name){
+  var f = document.search_form, e = f ? f[name] : null;
+  if(!e) return null;
+  if(e.tagName) return (e.type === 'checkbox') ? (e.checked ? e.value : '') : e.value;
+  var last = '';
+  for(var i = 0; i < e.length; i++){
+    var x = e[i];
+    if(x.type === 'checkbox'){ if(x.checked) last = x.value; }
+    else last = x.value;
+  }
+  return last;
+}
+
+// 코드값 → 화면에 보이는 이름. 못 찾으면 코드값 그대로 둔다(거짓말하지 않게).
+function optText(name, value){
+  var f = document.search_form, e = f ? f[name] : null, list = null;
+  if(e && e.options) list = e.options;
+  else if(e && !e.tagName) for(var i = 0; i < e.length; i++) if(e[i].options){ list = e[i].options; break; }
+  if(list) for(var j = 0; j < list.length; j++) if(list[j].value === value) return (list[j].text || '').trim();
+  return value === '' ? '(기본)' : value;
+}
+
+// 현재 화면의 폼 상태를 그대로 담는다.
+// ★ ps_status·ps_chd 셀렉트는 <form> DOM 바깥에 있지만 폼 소유자가 같아 FormData에는 들어온다(실측 확인).
+function captureCond(){
+  var f = document.search_form;
+  if(!f) return null;
+  var o = {};
+  new URLSearchParams(new FormData(f)).forEach(function(v, k){
+    if(COND_SKIP.indexOf(k) >= 0) return;
+    o[k] = v;                     // 중복 이름이면 마지막이 남는다
+  });
+  return o;
+}
+
+function condStatus(cond){ return (cond && cond.ps_status) ? cond.ps_status : STATUS; }
+function ymdOf(c, pre){
+  var y = c[pre+'_yy'], m = c[pre+'_mm'], d = c[pre+'_dd'];
+  return (y && m && d) ? (y + '-' + pad2(parseInt(m,10)) + '-' + pad2(parseInt(d,10))) : '?';
+}
+
+// 조건 요약. 아는 항목은 한글로 풀고, 모르는 항목은 원문 그대로 남긴다
+// — 화면에 안 보이는 조건이 조용히 적용되는 일이 없게.
+function condText(cond){
+  var out = [], seen = {};
+  if(!cond) return out;
+  function mark(){ Array.prototype.slice.call(arguments).forEach(function(k){ seen[k] = 1; }); }
+
+  // ★★ ps_duse=1(날짜검색 체크박스)이 없으면 서버가 날짜를 통째로 무시한다(2026-09-04 실측).
+  //    셀렉트에 날짜가 남아 있어도 '미사용'이므로 요약에 쓰지 않는다.
+  mark.apply(null, ['ps_duse'].concat(COND_DATE));
+  if(cond.ps_duse === '1')
+    out.push(optText('date_type', cond.date_type || '') + ' ' + ymdOf(cond,'start') + ' ~ ' + ymdOf(cond,'end'));
+
+  mark('search_type','ps_subject','goods_id_mode');
+  if(cond.ps_subject)
+    out.push(optText('search_type', cond.search_type || '') + ' "' + cond.ps_subject + '"'
+      + (cond.goods_id_mode === 'range' ? ' (범위검색)' : ''));
+
+  mark('ps_market_id'); if(cond.ps_market_id) out.push('마켓등록 ' + optText('ps_market_id', cond.ps_market_id));
+  mark('ps_status');    if(condStatus(cond) !== STATUS) out.push('상품상태 ' + optText('ps_status', condStatus(cond)));
+  mark('ps_currency');  if(cond.ps_currency) out.push('통화 ' + cond.ps_currency);
+  mark('ps_price_min','ps_price_max');
+  if(cond.ps_price_min || cond.ps_price_max) out.push('원가 ' + (cond.ps_price_min || '') + ' ~ ' + (cond.ps_price_max || ''));
+  mark('ps_gid_min','ps_gid_max');
+  if(cond.ps_gid_min || cond.ps_gid_max) out.push('상품번호 ' + (cond.ps_gid_min || '') + ' ~ ' + (cond.ps_gid_max || ''));
+
+  Object.keys(cond).forEach(function(k){ if(!seen[k] && cond[k] !== '') out.push(k + '=' + cond[k]); });
+  return out;
+}
+function condLine(cond){ var t = condText(cond); return t.length ? t.join(' · ') : '없음 (기본 조건)'; }
+
+// 자식 창 대조용 — 프리셋에 담긴 조건이 실제 화면에 그대로 복원됐는지 본다.
+function condDiff(cond){
+  var bad = [];
+  if(!cond) return bad;
+
+  // ps_duse는 해제 상태면 폼에 아예 실리지 않는다 → 없을 때도 '해제'로 대조한다.
+  var wantDuse = (cond.ps_duse === '1') ? '1' : '';
+  var gotDuse  = fieldVal('ps_duse');
+  if(gotDuse !== null && wantDuse !== gotDuse)
+    bad.push('조건 날짜검색 사용 — 요청 [' + (wantDuse || '해제') + '] / 실제 [' + (gotDuse || '해제') + ']');
+
+  Object.keys(cond).forEach(function(k){
+    if(k === 'ps_duse') return;
+    var got = fieldVal(k);
+    if(got === null) return;      // 화면에 없는 항목은 대조하지 않는다
+    if(String(cond[k]) !== String(got))
+      bad.push('조건 ' + (COND_LABEL[k] || k) + ' — 요청 [' + (cond[k] || '(빈값)') + '] / 실제 [' + (got || '(빈값)') + ']');
+  });
+  return bad;
+}
 
 // ────────────────────────────────────────────────────────────
 // 저장
@@ -182,6 +304,7 @@ function blank(){
     chd:'',
     rpt:'',                      // 반복 — '' = 안 함, 'H:M' = 매일 그 시각
     sch:'',                      // 예약 — '' = 바로 시작, 'H:M' = 그 시각에 1회차 시작 (v1.7)
+    cond:null,                   // 화면에서 담은 상세 검색조건 { 파라미터: 값 } (v1.10)
     useRange:true, total:0, first:450, size:500, skip:[]
   };
 }
@@ -255,11 +378,14 @@ function buildUrl(p, markets){
   add('amode','detail_search');
   add('pg','1');
   add('search_order', ORDER);
-  add('ps_status', STATUS);
+  add('ps_status', condStatus(p.cond));
   add('ps_chd', p.chd || '');
   add('s_market', JSON.stringify((markets || []).concat(p.items || [])));
   add('du_market', '[]');
   if(p.site) qs.push('ps_site_id%5B%5D=' + encodeURIComponent(p.site));
+  // 담아 둔 상세 검색조건을 그대로 덧붙인다. ps_status는 위에서 이미 냈으므로 건너뛴다.
+  var c = p.cond || {};
+  Object.keys(c).forEach(function(k){ if(k !== 'ps_status') add(k, c[k]); });
   return PAGE + '?' + qs.join('&');
 }
 
@@ -283,7 +409,8 @@ function expand(p){
   var base = {
     pid:p.id, name:p.name, site:p.site,
     items:(p.items||[]).slice(),
-    status:STATUS, chd:p.chd||'', order:ORDER, rpt:p.rpt||'', sch:p.sch||''
+    status:condStatus(p.cond), chd:p.chd||'', order:ORDER, rpt:p.rpt||'', sch:p.sch||'',
+    cond:p.cond ? JSON.parse(JSON.stringify(p.cond)) : null
   };
   if(!p.useRange){
     var mk = (p.markets||[]).slice();
@@ -346,7 +473,9 @@ function diff(job, act){
   cmp('전송마켓', job.markets, act.markets);
   if(job.order !== act.order) bad.push('정렬 — 요청 [' + job.order + '] / 실제 [' + act.order + ']');
   if((job.status||'') !== (act.status||'')) bad.push('상품상태 — 요청 [' + (job.status||'전체') + '] / 실제 [' + (act.status||'전체') + ']');
-  return bad;
+  // 담아 둔 상세 검색조건도 같이 대조한다(v1.10).
+  // 조건이 조용히 빠진 채로 도는 것이 이 기능에서 가장 위험한 실패다 — 엉뚱한 사업자 상품이 나간다.
+  return bad.concat(condDiff(job.cond));
 }
 
 // ★ capture 단계에서 자른다.
@@ -471,7 +600,8 @@ async function autoStart(job, head){
   autoPanel(head, function(){ abort = true; autoMsg('취소 요청을 받았습니다. 곧 중단합니다…'); });
 
   var info = '마켓: ' + esc(names(MARKETS, job.markets) || '없음(업데이트만)')
-           + ' / 항목: ' + esc(names(ITEMS, job.items) || '없음(전송만)');
+           + ' / 항목: ' + esc(names(ITEMS, job.items) || '없음(전송만)')
+           + ' / 조건: ' + esc(condLine(job.cond));
 
   // ① 페이지 로딩 대기. 플래그를 못 읽으면(null) 이 관문은 건너뛰고 ④가 판정한다.
   var flag = pageLoadedFlag(), waited = 0;
@@ -929,7 +1059,8 @@ function childMode(jid){
     lockStart('update_start', '런처: 이 창은 구간 ' + job.start + '~' + job.end + ' 전용입니다. 아래 범위설정 시작 버튼을 쓰세요.');
   }
   var info = '마켓: ' + esc(names(MARKETS, job.markets) || '없음(업데이트만)')
-           + ' / 항목: ' + esc(names(ITEMS, job.items) || '없음(전송만)');
+           + ' / 항목: ' + esc(names(ITEMS, job.items) || '없음(전송만)')
+           + ' / 조건: ' + esc(condLine(job.cond));
 
   var startMsg = job.auto  ? '잠시 후 자동으로 시작합니다.'
                : job.sched ? ('예약 시각 <b>' + esc(hhmm(job.sch)) + '</b>에 자동으로 시작합니다.')
@@ -1014,6 +1145,14 @@ function mkSummary(mk){
   return nm.length <= 2 ? nm.join(', ') : (nm.slice(0,2).join(', ') + ' 외 ' + (nm.length-2));
 }
 
+// 담긴 검색조건을 패널에 보여 준다. 안 담았으면 붉게 — 좁히지 않고 도는 것을 알아채게.
+function condBoxHtml(){
+  if(!cur.cond) return '<span style="color:#b94a48">담긴 조건 없음 — 화면 기본 조건으로 돕니다</span>';
+  var t = condText(cur.cond);
+  if(!t.length) return '<span style="color:#888">담았지만 좁히는 조건이 없습니다 (기본 조건)</span>';
+  return t.map(function(x){ return '· ' + esc(x); }).join('<br>');
+}
+
 function chunkList(p){
   var cs = chunks(p);
   if(!cs.length) return '<div style="color:#888">건수를 조회하면 구간이 만들어집니다.</div>';
@@ -1071,6 +1210,15 @@ function render(){
       + (cur.useRange ? '전송 마켓 (구간 기본값)' : '전송 마켓') + '</legend>'
       + checkRow(MARKETS, cur.markets, 'market')
       + (cur.useRange ? '<div style="color:#888;font-size:11px;margin-top:2px">구간별로 다르게 하려면 아래 구간 목록에서 [마켓 ▾]을 누르세요.</div>' : '')
+    + '</fieldset>'
+  + '<fieldset style="border:1px solid #ddd;padding:4px 6px;margin:0 0 6px"><legend style="font-size:11px">검색조건 (화면에서 담기)</legend>'
+      + '<div id="tmgLCondBox" style="padding:4px 6px;background:#f5f8fb;border:1px solid #dbe5ee;border-radius:4px;line-height:1.5">'
+      + condBoxHtml() + '</div>'
+      + '<div style="margin-top:4px"><button id="tmgLGrab">현재 화면 조건 담기</button> '
+      + '<button id="tmgLCondClear">비우기</button></div>'
+      + '<div style="color:#888;font-size:11px;margin-top:2px">위 검색폼에서 조건을 고른 뒤 담으세요. '
+      + '수집사이트·전송마켓·업데이트항목·변동일·정렬은 <b>위 항목이 담당</b>하므로 담기에서 제외됩니다.<br>'
+      + '★ 날짜는 <b>날짜검색 체크박스를 켜야</b> 적용됩니다 — 꺼진 채로 담으면 기간이 무시됩니다.</div>'
     + '</fieldset>'
   + '<div style="margin-bottom:6px">변동일 <select id="tmgLChd">' + pageOptions('ps_chd', cur.chd, '<option value="">전체</option>') + '</select></div>'
   + '<div style="margin-bottom:6px">예약 ' + timeSelects('Sch', cur.sch, '예약 안 함 (바로 시작)', '지정 시각에 시작')
@@ -1165,6 +1313,8 @@ function confirmText(jobs, mode){
     '· 업데이트항목 : ' + (names(ITEMS, cur.items) || '없음 (전송만)'),
     '· 전송마켓 : ' + mk,
     '· 변동일 : ' + (chd || '전체'),
+    '· 상품상태 : ' + optText('ps_status', condStatus(cur.cond)),
+    '· 검색조건 : ' + (cur.cond ? condLine(cur.cond) : '★ 담긴 조건 없음 — 좁히지 않고 전부'),
     '· 정렬 : 상품수집 날짜순(과거순)',
     '· 시작 : ' + (sched ? ('★ ' + schWhen() + ' — 그때까지 창을 열어 둬야 합니다')
                          : (AUTO_DELAY + '초 뒤 바로')),
@@ -1256,6 +1406,22 @@ function bindMain(){
       stat('검색결과 <b>' + cur.total.toLocaleString() + '</b>건 → 구간 ' + chunks(cur).length + '개');
       render();
     }catch(e){ stat('<span style="color:#c9302c">건수 조회 실패: ' + esc(e.message) + '</span>'); }
+  };
+
+  q('#tmgLGrab').onclick = function(){
+    collect();
+    var c = captureCond();
+    if(!c){ stat('<span style="color:#c9302c">화면 검색폼을 찾지 못했습니다.</span>'); return; }
+    cur.cond = c;
+    cur.total = 0;   // 조건이 바뀌면 이전 건수·구간은 더 이상 맞지 않는다
+    cur.skip = [];
+    render();
+    stat('화면 조건을 담았습니다 — <b>' + esc(condLine(cur.cond)) + '</b><br>'
+       + '조건이 바뀌었으니 <b>건수 조회</b>를 다시 눌러 구간을 새로 잡으세요.');
+  };
+  q('#tmgLCondClear').onclick = function(){
+    collect(); cur.cond = null; cur.total = 0; cur.skip = [];
+    render(); stat('조건을 비웠습니다. 건수 조회를 다시 눌러 구간을 새로 잡으세요.');
   };
 
   q('#tmgLSave').onclick = function(){
