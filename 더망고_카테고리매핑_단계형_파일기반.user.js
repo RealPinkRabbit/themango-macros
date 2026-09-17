@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         더망고 카테고리매핑 단계형 파일기반(수집→Claude매핑→적용)
 // @namespace    solddeul.tmg
-// @version      2.1
+// @version      2.2
 // @description  단계형 카테고리매핑을 "규칙 자동선택"이 아니라 "파일 기반 결정론"으로 처리. ① 수집(Export): 마켓별 신발·의류 카테고리 전체(카탈로그: 경로+코드+구분) + 리프(매핑대상)를 엑셀로 내려받음. ② 매핑: Claude가 그 엑셀을 받아 규칙대로 각 리프×마켓에 카탈로그 경로를 채움. ③ 적용(Apply): 매핑 엑셀을 불러오면 카탈로그로 경로→코드를 해석해 리프마다 설정페이지에서 주입·고시·저장(fetch-POST)·되읽기 검증. 규칙이 매크로에서 빠져 Claude 판단으로 이동 → 신상품마다 정규식 손볼 필요 없음.
 // @match        https://tmg4682.mycafe24.com/mall/admin/admin_category_new.php*
 // @match        https://tmg4682.mycafe24.com/mall/admin/admin_category_set.php*
@@ -33,7 +33,7 @@ var ENGLISH_MARKETS={SHOPEE:1, MUSTIT:1, QOO10JP:1};
 // =========================================================================
 var SWEEP_SHOE_KR=['남성화','여성화','신발','슈즈','운동화','스니커즈','부츠','워커','샌들','슬리퍼','구두','로퍼','힐','펌프스','플랫','모카신','아쿠아','골프화','등산화','트레킹','워킹화','러닝화','농구화','테니스화','캔버스','슬립온','뮬','장화','부티'];
 var SWEEP_SHOE_EN=['shoes','boots','sneakers','sandals','loafers','heels','flats','slippers','oxford','pumps','mule'];
-var SWEEP_APPAREL_KR=['남성의류','여성의류','의류','티셔츠','셔츠','블라우스','니트','스웨터','가디건','후드','맨투맨','조끼','베스트','자켓','재킷','점퍼','패딩','코트','플리스','바지','팬츠','청바지','데님','반바지','스커트','치마','원피스','레깅스','정장','민소매','트레이닝','홈웨어','아우터','상의','하의'];
+var SWEEP_APPAREL_KR=['남성의류','여성의류','의류','티셔츠','셔츠','블라우스','니트','스웨터','가디건','후드','맨투맨','조끼','베스트','자켓','재킷','점퍼','패딩','코트','플리스','바지','팬츠','청바지','데님','반바지','스커트','치마','원피스','레깅스','정장','민소매','트레이닝','홈웨어','아우터','상의','하의','카디건','블루종','야상','바람막이','집업','트렌치','블레이저','무스탕','모피','가죽','레더'];   // v2.2: 무신사 아우터 세분류(무스탕·레더·블레이저 등) 대응
 var SWEEP_APPAREL_EN=['t-shirt','shirts','knit','hoodie','sweatshirt','cardigan','jacket','coat','pants','jeans','shorts','skirt','dress','leggings','vest','outerwear'];
 // 하위호환(구 변수명을 참조하는 코드/메모용)
 var SWEEP_KR=SWEEP_SHOE_KR, SWEEP_EN=SWEEP_SHOE_EN;
@@ -60,12 +60,12 @@ var GOOD_ROOT=/신발|슈즈|의류|패션|구두|운동화|스니커|부츠|등
 // ★리프(±상위)가 특수 목적군이면 배제 — 낚시복/스쿠버/스키부츠/자전거화/레이싱슈즈 등
 var NICHE_WORD=/낚시|스킨스쿠버|다이빙|잠수|스노보드|^스키$|스키장비|자전거|사이클|오토바이|바이크|모터싸이클|스쿠터|롤러|인라인|승마|볼링|사격|레이싱|웨이크보드|청소|욕실|주방|한복|교복|유니폼|작업복/;
 // 신발·의류 '본품'이 아닌 부속/잡화 리프
-var ACC_JUNK=/신발장|정리함|수납|주머니|골프백|가방|백팩|에코백|크로스백|숄더백|토트백|파우치|캐리어|지갑|벨트|모자|캡모자|비니|장갑|스카프|머플러|넥워머|목걸이|팔찌|우산|양산|양말|삭스|스타킹|신발끈|운동화끈|깔창|인솔|^커버$|클리너|탈취|방향제|제습|건조기|세탁|걸이|보관|관리용품|용품|소품|구두약|구두솔|구둣?주걱|슈트리|제골기|부츠키퍼|보호쿠션|해먹|거치대|스프레이|^브러쉬$|^스펀지$|염색제|상품권|리폼|집게|정리대|케어/;
+var ACC_JUNK=/신발장|정리함|수납|주머니|골프백|가방|백팩|에코백|크로스백|숄더백|토트백|파우치|캐리어|지갑|벨트|모자|캡모자|비니|장갑|스카프|머플러|목도리|넥워머|목걸이|팔찌|우산|양산|양말|삭스|스타킹|신발끈|운동화끈|깔창|인솔|^커버$|클리너|탈취|방향제|제습|건조기|세탁|걸이|보관|관리용품|용품|소품|구두약|구두솔|구둣?주걱|슈트리|제골기|부츠키퍼|보호쿠션|해먹|거치대|스프레이|^브러쉬$|^스펀지$|염색제|상품권|리폼|집게|정리대|케어/;
 
 // 토큰 단위 매칭(짧은 어휘의 부분일치 오탐 방지: '시뮬레이션'의 뮬, '샤워커튼'의 워커, '부츠컷'의 부츠)
 function tokens(seg){ return String(seg).split(/[\s/·,()>\[\]&・\-]+/).filter(Boolean); }
 var FOOT_WORD=/화$|슈즈|신발|부츠$|부티|샌들|슬리퍼|슬립온|로퍼|힐$|하이힐|펌프스|^플랫(슈즈|폼)?$|플랫$|^워커|워커$|더비|구두|^뮬$|뮬$|블로퍼|모카신|옥스[퍼포]드|스니커|아쿠아슈즈|^아쿠아$|장화|크록스|덧신|니하이|싸이하이|^조리$|쪼리|플립플[랍롭]|웨지|토오픈|슬링백|에스파드|발레리나|메리제인|웰트화|shoes?$|boots?$|sneakers?|sandals?|loafers?|heels?$|pumps?$|flats?$|mules?$|oxfords?|derby|slippers?|clogs?|espadrille/i;
-var APPAREL_WORD=/^의류$|의류$|^상의$|^하의$|상하의|아우터|티셔츠|티셔트|반팔|긴팔|셔츠|남방|블라우스|니트|스웨터|가디건|카디건|풀오버|후드|맨투맨|스웻|트레이닝복|운동복|자켓|재킷|점퍼|블루종|패딩|덕다운|구스다운|코트$|조끼|베스트$|플리스|후리스|바지|팬츠|슬랙스|데님|스커트|치마|원피스|점프수트|레깅스|^정장$|정장바지|수트$|슈트$|민소매|나시|셋업|홈웨어|잠옷|파자마|래쉬가드|집업|숏패딩|롱패딩|tshirts?$|t-shirts?$|shirts?$|blouse|knit|sweater|cardigan|hoodie|sweatshirt|jackets?$|coats?$|vest$|fleece|pants$|trousers|jeans|shorts$|skirts?$|dress(es)?$|leggings|outerwear|jumper/i;
+var APPAREL_WORD=/^의류$|의류$|^상의$|^하의$|상하의|아우터|티셔츠|티셔트|반팔|긴팔|셔츠|남방|블라우스|니트|스웨터|가디건|카디건|풀오버|후드|맨투맨|스웻|트레이닝복|운동복|자켓|재킷|점퍼|블루종|패딩|덕다운|구스다운|코트$|조끼|베스트$|플리스|후리스|바지|팬츠|슬랙스|데님|스커트|치마|원피스|점프수트|레깅스|^정장$|정장바지|수트$|슈트$|민소매|나시|셋업|무스탕|모피|홈웨어|잠옷|파자마|래쉬가드|집업|숏패딩|롱패딩|tshirts?$|t-shirts?$|shirts?$|blouse|knit|sweater|cardigan|hoodie|sweatshirt|jackets?$|coats?$|vest$|fleece|pants$|trousers|jeans|shorts$|skirts?$|dress(es)?$|leggings|outerwear|jumper/i;
 function anyWord(re, segs){ for(var i=0;i<segs.length;i++){ var tk=tokens(segs[i]); for(var j=0;j<tk.length;j++){ if(re.test(tk[j])) return true; } } return false; }
 var ELEVEN_OVERSEAS=/해외/;   // ★단계형(ABC=국내 사업자): 11번가는 국내 카테고리여야 함 — 경로에 '해외'가 있으면 규칙위반
 function leafSeg(t){ return (String(t).split('>').pop()||'').trim(); }
@@ -99,6 +99,19 @@ function clr(){ localStorage.removeItem(LS); }
 function sleep(ms){ return new Promise(function(r){ setTimeout(r,ms); }); }
 function q(s){ return document.querySelector(s); }
 function DIR(){ return location.pathname.replace(/[^/]+$/,''); }
+// ★더망고 요청 제한(2026-09-03 실측: 연속 ~20회 fetch → status 200 'Access Denied … 과도한 접속', 약 40초 후 해제).
+//  차단 페이지를 정상 응답으로 파싱하면 '자식 없음=리프'·'검색결과 0건'으로 조용히 오염되므로 감지해 45초 대기 후 재시도.
+var BLOCKED=/과도한\s*접속|비정상적인\s*접속|Access\s*Denied/i;
+var _sweepMiss=[];   // 요청 제한·시간초과로 결과를 못 받은 검색 [마켓:키워드]
+async function postText(url, body, ctype){
+  for(var t=0;;t++){
+    var txt=await fetch(url,{method:'POST',credentials:'same-origin',headers:{'Content-Type':ctype||'application/x-www-form-urlencoded'},body:body}).then(function(r){return r.text();});
+    if(!BLOCKED.test(txt)) return txt;
+    if(t>=3) throw new Error('더망고 요청 제한(과도한 접속)이 풀리지 않음 — 몇 분 뒤 다시 시도하세요');
+    setStat('더망고 요청 제한 감지 — 45초 대기 후 재시도 ('+(t+1)+'/3)');
+    await sleep(45000);
+  }
+}
 function shortOf(full){ var s=String(full||''); while(s.length>3 && s.slice(-3)==='000') s=s.slice(0,-3); return s; }
 function normName(n){ if(/^MEN$/i.test(n)||/남성/.test(n)) return '남성'; if(/^WOMEN$/i.test(n)||/여성/.test(n)) return '여성'; return n; }
 function genderOf(name){ return name.indexOf('여성')>=0?'여성':(name.indexOf('남성')>=0?'남성':'공용'); }
@@ -115,7 +128,7 @@ function useMarketParam(){ var e=document.getElementById('use_market'); var v=e?
 async function catGetChildren(short){
   var g=short.length/3;
   var body='mode=category_get&category_depth='+(g+1)+'&category_id='+encodeURIComponent(short)+'&themango=';
-  var html=await fetch(DIR()+'admin_category_get_load.php',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:body}).then(function(r){return r.text();});
+  var html=await postText(DIR()+'admin_category_get_load.php', body);
   var doc=new DOMParser().parseFromString(html,'text/html');
   return Array.prototype.slice.call(doc.querySelectorAll('li')).map(function(li){
     var sp=li.querySelector('[id]'); if(!sp) return null;
@@ -126,7 +139,7 @@ async function enumerateLeaves(siteShort){
   var leaves=[]; var seen={}; var t0=Date.now();
   async function dfs(node, pathNames){
     if(Date.now()-t0>180000) return;
-    var kids; try{ kids=await catGetChildren(shortOf(node.full)); }catch(e){ kids=[]; }
+    var kids=await catGetChildren(shortOf(node.full));   // v2.2: 실패를 '자식 없음=리프'로 오인하지 않도록 예외를 그대로 올림
     if(!kids.length){ if(!seen[node.full]){ seen[node.full]=1; leaves.push({ id:node.full, name:pathNames.join(' ') }); } return; }
     for(var i=0;i<kids.length;i++){ await dfs(kids[i], pathNames.concat(normName(kids[i].name))); }
   }
@@ -137,7 +150,7 @@ async function enumerateLeaves(siteShort){
 async function leafInfo(leafFull){
   try{
     var body='mode=show_category&category_id='+encodeURIComponent(shortOf(leafFull))+'&use_market='+encodeURIComponent(useMarketParam())+'&themango=&pg=1&list_num=10';
-    var html=await fetch(DIR()+'admin_category_get_load.php',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:body}).then(function(r){return r.text();});
+    var html=await postText(DIR()+'admin_category_get_load.php', body);
     var m=html.match(/categorySet\('(\d+)','([^']*)','([^']*)'/);
     if(m && /^\d+$/.test(m[3])) return { mapped:true, psUid:m[3] };
   }catch(e){}
@@ -174,14 +187,16 @@ async function searchWait(m,kw){
     if(o.length && sig!==prev) return o;
     prev=sig;
   }
+  var sel2=document.getElementById('openmarket_category_search_list_'+m);
+  if(sel2 && sel2.options[0] && /검색중/.test(sel2.options[0].text||'')){ _sweepMiss.push(MLABEL[m]+':'+kw); return []; }   // v2.2: 응답 없음(요청 제한 의심) → 이전 키워드 결과를 재사용하지 않음
   return optsOf(m);
 }
 var _map11={};   // 11ST 코드→경로 맵(되읽기 검증에서 국내 코드 경로 복원용)
 // ★11ST(2026-07-15 브라우저 실측·확정): 사이트 search_category()는 국내/해외 라디오를 무시하고 항상 '해외 트리'만 반환한다(패션잡화·해외명품=모두 해외 트리). 진짜 국내 트리(남성신발>정장구두, 남성신발>로퍼 등)는 admin_config_marketinfo.php를 seller_type2로 직접 호출해야만 나온다(국내=2/해외=1). 응답은 JSON 배열, 각 원소 "코드@?@경로".
 async function marketInfo11st(kw, sellerType){
   var body='pmode=search_category&site=11ST&search_text='+encodeURIComponent(kw)+'&seller_type2='+sellerType+'&openmarket_id=&from_category=Y';
-  var t=await fetch(DIR()+'admin_config_marketinfo.php',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/x-www-form-urlencoded;charset=UTF-8'},body:body}).then(function(r){return r.text();}).catch(function(){return '[]';});
-  var arr; try{ arr=JSON.parse(t); }catch(e){ arr=[]; }
+  var t; try{ t=await postText(DIR()+'admin_config_marketinfo.php', body, 'application/x-www-form-urlencoded;charset=UTF-8'); }catch(e){ _sweepMiss.push('11번가:'+kw); return []; }
+  var arr; try{ arr=JSON.parse(t); }catch(e){ _sweepMiss.push('11번가:'+kw); arr=[]; }
   return arr.map(function(s){ var p=String(s).split('@'); return {t:p.slice(2).join('@'), v:p[0]}; });
 }
 async function sweepMarket(m, elevenType, onProg){
@@ -190,7 +205,7 @@ async function sweepMarket(m, elevenType, onProg){
   for(var i=0;i<kws.length;i++){
     if(onProg) onProg(i+1, kws.length);
     var r;
-    if(m==='11ST'){ r=await marketInfo11st(kws[i], elevenType==='해외'?'1':'2'); }   // ★11ST만 엔드포인트 직접 호출(국내=2/해외=1)
+    if(m==='11ST'){ r=await marketInfo11st(kws[i], elevenType==='해외'?'1':'2'); await sleep(300); }   // ★11ST만 엔드포인트 직접 호출(국내=2/해외=1)
     else { r=await searchWait(m, kws[i]); }
     r.forEach(function(o){
       if(seen[o.v]) return;
@@ -292,7 +307,12 @@ async function runExport(){
   XLSX.writeFile(wb, fname);
   var total=MARKETS.reduce(function(s,m){return s+(catalog[m]?catalog[m].length:0);},0);
   var nShoe=0,nApp=0; MARKETS.forEach(function(m){ (catalog[m]||[]).forEach(function(c){ if(c.kind==='의류') nApp++; else nShoe++; }); });
-  setStat('엑셀 내보냄: '+fname+' — 카탈로그 '+total+'건(신발 '+nShoe+' · 의류 '+nApp+') · 리프 '+leaves.length+'개 · 11번가='+elevenType+'. 이 파일을 Claude에게 주고 매핑 시트를 채워 오세요.');
+  var empty=MARKETS.filter(function(m){ return !(catalog[m]&&catalog[m].length); }).map(function(m){ return MLABEL[m]; });
+  var warn='';
+  if(_sweepMiss.length) warn+=' ⚠ 응답 없는 검색 '+_sweepMiss.length+'건('+_sweepMiss.slice(0,5).join(', ')+(_sweepMiss.length>5?' …':'')+') — 요청 제한 의심, 몇 분 뒤 다시 수집 권장.';
+  if(empty.length) warn+=' ⚠ 카탈로그 0건 마켓: '+empty.join(', ')+'.';
+  setStat('엑셀 내보냄: '+fname+' — 카탈로그 '+total+'건(신발 '+nShoe+' · 의류 '+nApp+') · 리프 '+leaves.length+'개 · 11번가='+elevenType+'. 이 파일을 Claude에게 주고 매핑 시트를 채워 오세요.'+warn);
+  try{ console.log('[TMG 파일수집] 응답 없는 검색', JSON.stringify(_sweepMiss)); }catch(e){}
   clr();
 }
 
