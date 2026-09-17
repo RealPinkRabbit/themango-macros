@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         더망고 상품업데이트 런처
 // @namespace    solddeul.tmg
-// @version      1.11.0
+// @version      1.12.0
 // @description  상품업데이트&마켓전송 화면의 설정(수집사이트/업데이트항목/전송마켓/변동일/범위)을 프리셋으로 저장해 두고, 범위를 구간으로 나눠 여러 창을 한꺼번에 띄운다. v1.6부터 구간은 최대 5개다(동시 5창 한도) — 1~4구간은 지정한 크기대로 끊고 5번째가 남은 전량을 맡는다. v1.7에 [실행+예약]을 추가했다 — 창을 미리 열어 두고 프리셋의 '예약' 시각이 되면 대조를 다시 한 뒤 스스로 시작한다. 구간마다 전송마켓을 따로 지정할 수 있다. 새로 열린 창은 프리셋과 실제 화면을 대조해 일치할 때만 시작 버튼을 열어 준다. [실행]은 창만 열고 사람이 시작을 누르며, [실행+자동시작]은 확인창 1회를 거쳐 각 창이 대조 통과 후 스스로 시작한다. v1.4부터 런처가 연 창에서는 더망고의 auto_repeat(자동 재시작)을 끈다. v1.5부터는 반복이 필요하면 런처가 직접 한다 — 프리셋에 '매일 HH:MM'을 지정하면 완료를 감지해 그 시각에 대조를 다시 하고 시작 버튼을 누른다. ★v1.9에서 반복 2회차가 늘 0건으로 끝나던 버그를 고쳤다 — 더망고의 회차 커서 초기화가 auto_repeat 블록 안에 들어 있어, v1.4가 반복을 끄면서 초기화까지 같이 꺼져 있었다. 시작 직전에 런처가 커서를 대신 되돌리고, 회차가 0건으로 끝나면 배너와 탭 제목으로 드러낸다. ★v1.10에서 화면의 상세 검색조건(검색유형+검색어·마켓등록여부·날짜검색·상품상태·통화·가격/상품번호 범위 등)을 프리셋에 담을 수 있게 했다 — [현재 화면 조건 담기] 한 번이면 되고, 건수조회·구간분할·예약·반복·대조가 모두 그 조건을 따른다. 같은 수집사이트를 두 사업자가 나눠 쓰는 경우(검색필터명 검색으로 구분) 때문에 필요해졌다. ★v1.11에서 v1.6이 5로 고정했던 구간(창) 수 상한을 프리셋에서 정할 수 있게 했다 — 기본 5, 최대 10. 5를 넘기면 패널과 확인창에 경고가 붙는다(더망고가 5창 초과를 어떻게 처리하는지는 아직 확인된 적이 없다).
 // @match        https://tmg4682.mycafe24.com/mall/admin/admin_goods_update.php*
 // @run-at       document-idle
@@ -106,13 +106,28 @@
 //      자세한 것은 resetCursors() 위 주석. '검증 안 된 것은 건드리지 않는다'가
 //      이 경우엔 오히려 나빴다: 반쯤만 되돌린 상태가 아무것도 안 되돌린 것보다 나쁘다.
 // ────────────────────────────────────────────────────────────
-var SITES = [
+// v1.12: 수집사이트 목록은 화면의 ps_site_id[] 체크박스에서 읽는다(더망고에 사이트가 추가되면 자동 반영).
+//   화면 구조(2026-09-17 실측): <span><input name="ps_site_id[]" value="musinsa" id="update_musinsa_yn">#MUSINSA.com</span>
+//   SITES_KNOWN은 표시명 보강용 + 화면에서 못 읽을 때의 예비 목록이다.
+var SITES_KNOWN = [
   {v:'a_rt',               t:'ABCmart.a-rt.com'},
+  {v:'musinsa',            t:'MUSINSA.com (무신사)'},
   {v:'zara_de',            t:'Zara.com/de (독일자라)'},
   {v:'zara_kr',            t:'Zara.com/kr (국내자라)'},
   {v:'coupang_mystore',    t:'쿠팡(내스토어)'},
   {v:'smartstore_mystore', t:'스마트스토어(내스토어)'}
 ];
+function readSites(){
+  var out = [];
+  Array.prototype.slice.call(document.querySelectorAll('input[name="ps_site_id[]"]')).forEach(function(e){
+    if(!e.value || out.some(function(x){ return x.v === e.value; })) return;
+    var known = SITES_KNOWN.filter(function(x){ return x.v === e.value; })[0];
+    var txt = ((e.parentElement && e.parentElement.textContent) || '').replace(/\s+/g,' ').trim().replace(/^#\s*/,'');
+    out.push({v:e.value, t: known ? known.t : (txt || e.value)});
+  });
+  return out.length ? out : SITES_KNOWN.slice();
+}
+var SITES = readSites();
 // ALL('모든정보')은 나머지 4개와 배타 관계다 — 화면 동작과 동일하게 맞춘다.
 var ITEM_ALL = 'all';
 var ITEMS = [
@@ -1244,6 +1259,8 @@ function render(){
     '<div style="margin-bottom:6px">이름 <input id="tmgLName" value="' + esc(cur.name) + '" style="width:150px"></div>'
   + '<div style="margin-bottom:6px">수집사이트 <select id="tmgLSite">'
       + SITES.map(function(s){ return '<option value="' + s.v + '"' + (s.v===cur.site?' selected':'') + '>' + esc(s.t) + '</option>'; }).join('')
+      + (cur.site && !SITES.some(function(s){ return s.v === cur.site; })   // 저장된 사이트가 화면에 없으면 조용히 첫 사이트로 바뀌지 않게 그대로 보여 준다
+          ? '<option value="' + esc(cur.site) + '" selected>' + esc(cur.site) + ' (화면에 없음)</option>' : '')
       + '</select></div>'
   + '<fieldset style="border:1px solid #ddd;padding:4px 6px;margin:0 0 6px"><legend style="font-size:11px">업데이트 항목 (모든정보는 배타)</legend>'
       + checkRow(ITEMS, cur.items, 'item') + '</fieldset>'
