@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         더망고 상품업데이트 런처
 // @namespace    solddeul.tmg
-// @version      1.12.0
+// @version      1.18.2
 // @description  상품업데이트&마켓전송 화면의 설정(수집사이트/업데이트항목/전송마켓/변동일/범위)을 프리셋으로 저장해 두고, 범위를 구간으로 나눠 여러 창을 한꺼번에 띄운다. v1.6부터 구간은 최대 5개다(동시 5창 한도) — 1~4구간은 지정한 크기대로 끊고 5번째가 남은 전량을 맡는다. v1.7에 [실행+예약]을 추가했다 — 창을 미리 열어 두고 프리셋의 '예약' 시각이 되면 대조를 다시 한 뒤 스스로 시작한다. 구간마다 전송마켓을 따로 지정할 수 있다. 새로 열린 창은 프리셋과 실제 화면을 대조해 일치할 때만 시작 버튼을 열어 준다. [실행]은 창만 열고 사람이 시작을 누르며, [실행+자동시작]은 확인창 1회를 거쳐 각 창이 대조 통과 후 스스로 시작한다. v1.4부터 런처가 연 창에서는 더망고의 auto_repeat(자동 재시작)을 끈다. v1.5부터는 반복이 필요하면 런처가 직접 한다 — 프리셋에 '매일 HH:MM'을 지정하면 완료를 감지해 그 시각에 대조를 다시 하고 시작 버튼을 누른다. ★v1.9에서 반복 2회차가 늘 0건으로 끝나던 버그를 고쳤다 — 더망고의 회차 커서 초기화가 auto_repeat 블록 안에 들어 있어, v1.4가 반복을 끄면서 초기화까지 같이 꺼져 있었다. 시작 직전에 런처가 커서를 대신 되돌리고, 회차가 0건으로 끝나면 배너와 탭 제목으로 드러낸다. ★v1.10에서 화면의 상세 검색조건(검색유형+검색어·마켓등록여부·날짜검색·상품상태·통화·가격/상품번호 범위 등)을 프리셋에 담을 수 있게 했다 — [현재 화면 조건 담기] 한 번이면 되고, 건수조회·구간분할·예약·반복·대조가 모두 그 조건을 따른다. 같은 수집사이트를 두 사업자가 나눠 쓰는 경우(검색필터명 검색으로 구분) 때문에 필요해졌다. ★v1.11에서 v1.6이 5로 고정했던 구간(창) 수 상한을 프리셋에서 정할 수 있게 했다 — 기본 5, 최대 10. 5를 넘기면 패널과 확인창에 경고가 붙는다(더망고가 5창 초과를 어떻게 처리하는지는 아직 확인된 적이 없다).
 // @match        https://tmg4682.mycafe24.com/mall/admin/admin_goods_update.php*
 // @run-at       document-idle
@@ -166,6 +166,8 @@ var AUTO_DELAY = 5;
 
 var KEY_STORE = 'tmg_update_launcher_v1';
 var KEY_JOB   = 'tmg_update_job_';
+var KEY_CHAIN = 'tmg_update_chain_';   // 이어서 실행 그룹 (v1.14)
+var KEY_RESULT = 'tmg_update_result_'; // 창별 실행 결과 요약 (v1.18)
 var PAGE      = location.pathname.replace(/[^/]+$/,'') + 'admin_goods_update.php';
 
 function q(s){ return document.querySelector(s); }
@@ -240,6 +242,17 @@ function captureCond(){
 }
 
 function condStatus(cond){ return (cond && cond.ps_status) ? cond.ps_status : STATUS; }
+
+// ★★ v1.13 (2026-10-27 실측): 변동일(ps_chd)은 날짜종류 date_type=2(가격/재고변동일자)와 같이 와야만 걸린다.
+//   화면에서도 변동일 셀렉트는 날짜종류를 '가격/재고변동일자'로 골라야 나타난다.
+//   ps_chd만 보내면 서버가 '0개'를 돌려준다(솔데글KR-ABC: ps_chd=1 → 0개, +date_type=2 → 903개).
+//   v1.12까지는 ps_chd만 보내서 변동일을 고르면 대상이 늘 0개였다.
+//   → 변동일이 있으면 담아 둔 조건의 date_type을 '2'로 덮어쓴다. URL·대조가 같은 값을 쓴다.
+function effCond(p){
+  var c = p.cond ? JSON.parse(JSON.stringify(p.cond)) : {};
+  if(p.chd) c.date_type = '2';
+  return c;
+}
 function ymdOf(c, pre){
   var y = c[pre+'_yy'], m = c[pre+'_mm'], d = c[pre+'_dd'];
   return (y && m && d) ? (y + '-' + pad2(parseInt(m,10)) + '-' + pad2(parseInt(d,10))) : '?';
@@ -319,6 +332,7 @@ function blank(){
     chd:'',
     rpt:'',                      // 반복 — '' = 안 함, 'H:M' = 매일 그 시각
     sch:'',                      // 예약 — '' = 바로 시작, 'H:M' = 그 시각에 1회차 시작 (v1.7)
+    send2:'',                    // 전송 방식 — '' = 업데이트와 함께 전송 / 'chg' = 업데이트 후 마켓별 변동분만 전송 (v1.15)
     cond:null,                   // 화면에서 담은 상세 검색조건 { 파라미터: 값 } (v1.10)
     maxWin:WIN_DEFAULT,          // 동시에 띄울 창(구간) 수 상한 (v1.11)
     useRange:true, total:0, first:450, size:500, skip:[]
@@ -379,6 +393,51 @@ function chunkMarkets(p, no){
   return (p.markets || []).slice();
 }
 
+// ── 전송 방식 'chg'(업데이트 후 변동분만 전송)의 마켓별 계획 (v1.15) ──
+// 구간별 마켓 설정을 '마켓 단위'로 바꿔 읽는다.
+//  · 어느 구간에든 들어 있는 마켓 → 그 마켓 '등록상품' 중 변동분을 보낸다(ps_market_id=마켓).
+//    등록된 상품만 고르므로 구간을 몰라도 원래 구간 구성이 저절로 지켜진다
+//    (2026-10-27 솔데글KR: 스마트스토어 등록 950 = 1구간, 옥션·G마켓 1,950 = 1~2구간).
+//  · 모든 구간에 들어 있는 마켓(all) → '미등록상품'도 보낸다(ps_market_id=마켓_no, 변동일 무관).
+//    신규 수집분·등록 실패분의 등록 시도다. 일부 구간에만 있는 마켓은 등록 상한 때문에 그렇게 나눈 것이라
+//    미등록상품을 보내면 상한을 넘겨 새로 등록을 시도하게 된다 → 보내지 않는다.
+// ★ v1.16: 구간 체크 해제(skip)와 무관하게 '전체 구간 배치'로 계산한다(v1.15 H1 — 해제하면 일부 구간 마켓이
+//   '모든 구간'으로 잘못 판정돼 미등록 전체를 보냈다). 마켓마다 그 마켓이 들어 있는 순번 구간(iv)을 함께 돌려준다.
+//   마지막 구간은 끝이 열려 있다(end = null = 끝까지). 순번은 상품수집 날짜순(과거순) = 상품번호 오름차순.
+function sendPlan(p){
+  var cs = p.useRange ? chunks(p) : [{no:1, start:1, end:null}];
+  if(cs.length) cs[cs.length - 1] = Object.assign({}, cs[cs.length - 1], {end:null});
+  var plan = [];
+  MARKETS.forEach(function(x){
+    var iv = [], n = 0;
+    cs.forEach(function(c){
+      var mk = p.useRange ? chunkMarkets(p, c.no) : (p.markets || []);
+      if(mk.indexOf(x.v) < 0) return;
+      n++;
+      var last = iv[iv.length - 1];
+      if(last && last[1] !== null && last[1] + 1 === c.start) last[1] = c.end;   // 붙어 있는 구간은 합친다
+      else iv.push([c.start, c.end]);
+    });
+    if(n) plan.push({m:x.v, t:x.t, all:(n === cs.length), iv:iv});
+  });
+  return plan;
+}
+function ivText(iv){
+  return iv.map(function(r){ return r[0].toLocaleString() + '~' + (r[1] === null ? '끝' : r[1].toLocaleString()) + '번'; }).join(', ');
+}
+// [업데이트 먼저] 방식의 업데이트 단계 = 마켓 없음·변동일 전체. 건수 조회·구간 분할·창 열기가 모두 이것을 쓴다.
+// ★ v1.15.1까지 건수 조회만 이걸 안 써서, 변동일(전송 단계)을 고르면 총건수가 변동분 건수로 줄고
+//   구간이 그만큼만 만들어졌다(3,147건 중 앞쪽 1,504건만 업데이트되는 버그).
+function stage1(p){
+  return (p.send2 === 'chg') ? Object.assign({}, p, {markets:[], cmk:{}, chd:''}) : p;
+}
+function planText(plan, chdLabel){
+  if(!plan.length) return '전송 마켓 없음 (건수 조회를 먼저 하세요)';
+  return plan.map(function(x){
+    return x.t + '(' + (chdLabel || '변동분') + ' + 미등록' + (x.all ? '' : ' ' + ivText(x.iv)) + ')';
+  }).join(', ');
+}
+
 // ────────────────────────────────────────────────────────────
 // 참고용 동시창 안내 (강의 3-24 / 3-35) — 열린 창 배너에만 표시한다.
 //  · 업데이트(수집사이트→더망고): 수집사이트당 5창. 창 수만큼 실제로 빨라진다.
@@ -414,7 +473,7 @@ function buildUrl(p, markets){
   add('du_market', '[]');
   if(p.site) qs.push('ps_site_id%5B%5D=' + encodeURIComponent(p.site));
   // 담아 둔 상세 검색조건을 그대로 덧붙인다. ps_status는 위에서 이미 냈으므로 건너뛴다.
-  var c = p.cond || {};
+  var c = effCond(p);
   Object.keys(c).forEach(function(k){ if(k !== 'ps_status') add(k, c[k]); });
   return PAGE + '?' + qs.join('&');
 }
@@ -423,12 +482,80 @@ function buildUrl(p, markets){
 // 검색결과 건수 조회 — 프리셋 조건 그대로 fetch해서 읽는다.
 // (현재 화면 건수를 쓰면 조건이 다를 때 조용히 틀린 구간이 만들어진다)
 // ────────────────────────────────────────────────────────────
-async function fetchTotal(p){
-  var html = await fetch(buildUrl(p, p.markets), {credentials:'same-origin'}).then(function(r){ return r.text(); });
+// ★ 더망고 요청 제한(연속 ~20회 → 약 40초 'Access Denied … 과도한 접속', HTTP 200) — v1.16
+//   차단 페이지는 건수 문구가 없어 '못 셈'으로 끝났다. 감지해서 기다렸다가 다시 묻는다.
+function isBlocked(html){ return /과도한\s*접속|비정상적인\s*접속|Access\s*Denied/i.test(html); }
+async function getHtml(url, note){
+  for(var a = 0; a < 4; a++){
+    var html = await fetch(url, {credentials:'same-origin'}).then(function(r){ return r.text(); });
+    if(!isBlocked(html)) return html;
+    if(note) note('⏳ 더망고 요청 제한에 걸렸습니다. 45초 기다렸다가 다시 묻습니다… (' + (a + 1) + '/3)');
+    if(a < 3) await sleep(45000);
+  }
+  throw new Error('더망고 요청 제한이 풀리지 않았습니다');
+}
+async function fetchTotal(p, note){
+  var html = await getHtml(buildUrl(p, p.markets), note);
   var text = html.replace(/<[^>]+>/g,' ');
   var m = text.match(/총\s*([\d,]+)\s*개의\s*상품/);
-  if(!m) throw new Error('건수 문구를 찾지 못했습니다');
+  if(!m) throw new Error('건수 문구를 찾지 못했습니다(로그인이 풀렸을 수 있습니다)');
   return parseInt(m[1].replace(/,/g,''), 10);
+}
+
+// ── 순번 → 상품번호 (v1.16) ──
+// 상품관리(admin_goods.php)의 '과거상품부터 보기'(ps_sort=datedown)가 업데이트 화면의 uid_asc와 같은 순서다
+// (2026-10-27 실측: 솔데글KR 950번째 108637, 1,950번째 110450 — 양쪽 일치, 10개 표본 페이지 단조 증가).
+// 이 화면은 검색폼 값을 전부 실어야 검색이 걸리므로 기본 폼을 한 번 읽어 그 위에 조건을 덮는다.
+var GOODS_PAGE = location.pathname.replace(/[^/]+$/,'') + 'admin_goods.php';
+var goodsBase = null;
+async function goodsDefaults(note){
+  if(goodsBase) return goodsBase;
+  var d = new DOMParser().parseFromString(await getHtml(GOODS_PAGE, note), 'text/html');
+  var f = d.forms.search_form || d.querySelector('form[name=search_form]');
+  if(!f) throw new Error('상품관리 검색폼을 찾지 못했습니다');
+  var o = {};
+  for(var i = 0; i < f.elements.length; i++){
+    var e = f.elements[i];
+    if(!e.name || e.disabled) continue;
+    if((e.type === 'checkbox' || e.type === 'radio') && !e.checked) continue;
+    o[e.name] = e.value;
+  }
+  goodsBase = o;
+  return o;
+}
+async function goodsPage(site, cond, page, note){
+  var o = Object.assign({}, await goodsDefaults(note));
+  Object.keys(cond || {}).forEach(function(k){ o[k] = cond[k]; });
+  delete o['ps_site_id[]'];
+  Object.assign(o, {amode:'detail_search', ps_site_id:site, ps_status:condStatus(cond),
+                    ps_sort:'datedown', ps_num:'10', ps_page:String(page)});
+  var html = await getHtml(GOODS_PAGE + '?' + new URLSearchParams(o), note);
+  await sleep(1300);                                   // 요청 제한 대비 — 연속 호출 간격
+  var x = html.replace(/<[^>]+>/g,' ').replace(/\s+/g,' ');
+  var tots = x.match(/총\s*([\d,]+)\s*개/g) || [];
+  var ids = (x.match(/\[ 상품번호 : (\d+)/g) || []).map(function(v){ return parseInt(v.replace(/\D/g,''), 10); });
+  if(tots.length < 2) throw new Error('상품관리 목록 건수를 읽지 못했습니다');
+  return {total:parseInt(tots[1].replace(/\D/g,''), 10), ids:ids};
+}
+// 목록에서 pos번째(1부터) 상품번호
+async function uidAt(site, cond, pos, note){
+  var r = await goodsPage(site, cond, Math.ceil(pos / 10), note);
+  var v = r.ids[(pos - 1) % 10];
+  if(v == null) throw new Error(pos + '번째 상품을 찾지 못했습니다');
+  return v;
+}
+// 목록에서 상품번호 <= u 인 상품 수 (목록은 상품번호 오름차순) — 쪽 단위 이분 탐색
+async function countLE(site, cond, u, note){
+  var first = await goodsPage(site, cond, 1, note);
+  if(!first.total || !first.ids.length || first.ids[0] > u) return 0;
+  var lo = 1, hi = Math.ceil(first.total / 10);
+  while(lo < hi){
+    var mid = Math.ceil((lo + hi) / 2);
+    var r = await goodsPage(site, cond, mid, note);
+    if(r.ids.length && r.ids[0] <= u) lo = mid; else hi = mid - 1;
+  }
+  var last = (lo === 1) ? first : await goodsPage(site, cond, lo, note);
+  return (lo - 1) * 10 + last.ids.filter(function(v){ return v <= u; }).length;
 }
 
 // ────────────────────────────────────────────────────────────
@@ -462,7 +589,8 @@ async function openAll(jobs){
   var opened = 0;
   for(var i=0; i<jobs.length; i++){
     var j = jobs[i];
-    localStorage.setItem(KEY_JOB + j.jid, JSON.stringify(j));
+    try{ localStorage.setItem(KEY_JOB + j.jid, JSON.stringify(Object.assign({at:Date.now()}, j))); }
+    catch(e){ return {opened:opened, blocked:false, rest:jobs.slice(i), error:'작업 정보를 저장하지 못했습니다(브라우저 저장공간) — ' + e.message}; }
     var w = window.open(j.url + '#tmglauncher=' + j.jid, '_blank');
     if(!w) return {opened:opened, blocked:true, rest:jobs.slice(i)};
     opened++;
@@ -488,7 +616,8 @@ function actualState(){
     items: picked(ITEMS),
     markets: picked(MARKETS),
     order: (f && f.search_order) ? f.search_order.value : '',
-    status: (f && f.ps_status) ? f.ps_status.value : ''
+    status: (f && f.ps_status) ? f.ps_status.value : '',
+    chd: (f && f.ps_chd) ? f.ps_chd.value : ''
   };
 }
 
@@ -505,7 +634,9 @@ function diff(job, act){
   if((job.status||'') !== (act.status||'')) bad.push('상품상태 — 요청 [' + (job.status||'전체') + '] / 실제 [' + (act.status||'전체') + ']');
   // 담아 둔 상세 검색조건도 같이 대조한다(v1.10).
   // 조건이 조용히 빠진 채로 도는 것이 이 기능에서 가장 위험한 실패다 — 엉뚱한 사업자 상품이 나간다.
-  return bad.concat(condDiff(job.cond));
+  // 변동일도 대조한다(v1.13). 빠지면 전량이 마켓으로 나간다.
+  if((job.chd||'') !== (act.chd||'')) bad.push('변동일 — 요청 [' + (job.chd||'전체') + '] / 실제 [' + (act.chd||'전체') + ']');
+  return bad.concat(job.chd ? condDiff(effCond(job)) : condDiff(job.cond));
 }
 
 // ★ capture 단계에서 자른다.
@@ -617,6 +748,7 @@ async function pressStart(btn){
 async function autoStart(job, head){
   var abort = false;
   function stop(reason){
+    chainFail(job, '자동 시작 안 함 — ' + reason);
     banner('⛔ ' + head + ' — <b>자동 시작을 하지 않았습니다.</b><br>&nbsp;&nbsp;· ' + esc(reason)
       + '<br>&nbsp;&nbsp;· 설정을 확인한 뒤 <b>시작 버튼을 직접</b> 누르세요.', '#c9302c');
   }
@@ -745,12 +877,13 @@ function setTitle(tag){
   }catch(e){}
 }
 
-function doneBanner(head, info, c){
+function doneBanner(head, info, c, extra, color){
   banner('🏁 ' + head + ' — <b>이 구간이 끝났습니다.</b>' + cntTail(c)
     + '<br>&nbsp;&nbsp;· ' + info
     + zeroWarn(c)
-    + '<br>&nbsp;&nbsp;· 런처가 자동 반복을 껐으므로 이 창은 더 이상 아무것도 하지 않습니다. 닫으셔도 됩니다.',
-    (c && c.zero) ? '#c9302c' : '#2e6da4');
+    + (extra ? '<br>&nbsp;&nbsp;· ' + extra
+             : '<br>&nbsp;&nbsp;· 런처가 자동 반복을 껐으므로 이 창은 더 이상 아무것도 하지 않습니다. 닫으셔도 됩니다.'),
+    color || ((c && c.zero) ? '#c9302c' : '#2e6da4'));
   setTitle((c && c.zero) ? '완료·0건' : '완료');
 }
 
@@ -923,6 +1056,7 @@ async function scheduleStart(job, head, info){
   var cancelled = false;
 
   function bye(reason, color){
+    chainFail(job, '예약 실행 안 함 — ' + reason);
     banner('⛔ ' + head + ' — <b>예약을 실행하지 않았습니다.</b>'
       + '<br>&nbsp;&nbsp;· ' + esc(reason)
       + '<br>&nbsp;&nbsp;· 확인한 뒤 <b>시작 버튼을 직접</b> 누르세요.', color || '#c9302c');
@@ -1042,12 +1176,278 @@ async function repeatLoop(job, head, info, last){
   }
 }
 
+// ── ★ 실행 결과 기록 (v1.18) ──────────────────────────────────
+// 창마다 로그(#layer_page)를 요약해 localStorage에 남긴다 — 창을 닫아도, 다른 탭에서 실행했어도
+// 아침에 한 곳(패널 [지난 실행 결과])에서 볼 수 있게. 1분마다 '진행 중'으로, 끝나면 '완료'로 덮어쓴다.
+// 그래서 중간에 닫힌 창은 마지막 '진행 중' 기록이 남는다(닫힌 시각 ≈ 마지막 기록 시각).
+// 로그 한 줄 형식(실측): [번호] [YYYYMMDD HH:MM:SS] [종류] [마켓|사이트] [계정] [상품번호] 이름 → 결과
+// ★ v1.18.1: 더망고는 로그를 최근 ~20줄만 남기고 앞쪽을 지운다(2026-11-03 실측 — v1.18 기록이 창마다
+//   '성공 19'처럼 마지막 19~20줄만 집계됐다). 그래서 화면을 가끔 읽지 않고, 로그에 줄이 붙을 때마다
+//   (MutationObserver) 새 줄만 골라 누적한다. 같은 줄은 내용(번호·시각 포함)으로 한 번만 센다.
+function newRec(){ return {ok:0, fail:0, login:0, lines:0, kinds:{}, reasons:{}, samples:{}, firstAt:'', lastAt:'', seen:{}, order:[]}; }
+function parseLine(r, line){
+  var m = line.match(/\[(\d{8} \d{2}:\d{2}:\d{2})\]\s*\[([^\]]+)\]\s*(.*?)→\s*(.*)$/);
+  if(!m) return;
+  var kind = m[2], headTxt = m[3];
+  var res = m[4].replace(/\[?FAQ[^\]]*\]?\([^)]*\)/g, '').replace(/FAQ 바로가기/g, '').replace(/https?:\S+/g, '').replace(/\s+/g, ' ').trim();
+  if(kind === '마켓로그인체크'){ if(!/성공/.test(res)) r.login++; return; }
+  r.lines++;
+  var brs = headTxt.match(/\[[^\]]*\]/g) || [];
+  var where = (kind === '마켓전송' && brs[0]) ? brs[0].slice(1, -1) : '';
+  var key = kind + (where ? ' · ' + where : '');
+  var k = r.kinds[key] = r.kinds[key] || {ok:0, fail:0};
+  if(!r.firstAt) r.firstAt = m[1];
+  r.lastAt = m[1];
+  if(/완료/.test(res) && !/실패|불가|초과|없습니다/.test(res)){ k.ok++; r.ok++; return; }
+  k.fail++; r.fail++;
+  // ★ v1.18.2: 상품마다 다른 번호(이미지 id·옵션 id·상품번호)를 지워야 같은 사유가 한 줄로 묶인다
+  //   (11/06 11번가 이미지 오류 93건이 번호 때문에 1건씩 흩어졌다). 4자리 이하(예: 한도 5000, 지재권 코드)는 남긴다.
+  var rk = key + ' | ' + res.replace(/\[\d{5,}[^\]]*\]/g, '[#]').replace(/\d{5,}/g, '#').slice(0, 90);
+  r.reasons[rk] = (r.reasons[rk] || 0) + 1;
+  var sm = r.samples[rk] = r.samples[rk] || [];
+  if(sm.length < 2){
+    var u = headTxt.match(/\[(\d{5,})\]/);
+    sm.push((u ? u[1] + ' ' : '') + headTxt.replace(/\[[^\]]*\]/g, '').trim().slice(0, 30));
+  }
+}
+var REC = null;
+function recScan(){
+  var el = document.getElementById('layer_page');
+  if(!el || !REC) return;
+  var txt = el.innerText || '';
+  var lines = txt.indexOf('\n') >= 0 ? txt.split('\n') : (el.textContent || '').split(/(?=\.{6}\[)/);
+  for(var i = 0; i < lines.length; i++){
+    var ln = lines[i].trim();
+    if(ln.indexOf('→') < 0 || REC.seen[ln]) continue;
+    REC.seen[ln] = 1; REC.order.push(ln);
+    if(REC.order.length > 600) delete REC.seen[REC.order.shift()];   // 화면에 남는 줄보다 넉넉히만 기억
+    parseLine(REC, ln);
+  }
+}
+function recStart(){
+  if(REC) return;
+  REC = newRec();
+  var el = document.getElementById('layer_page');
+  if(el && window.MutationObserver){
+    var pend = false;
+    new MutationObserver(function(){
+      if(pend) return; pend = true;
+      Promise.resolve().then(function(){ pend = false; recScan(); });
+    }).observe(el, {childList:true, subtree:true, characterData:true});
+  }
+  recScan();
+}
+// 하위호환: 예전 이름. 누적값을 돌려준다.
+function parseLog(){ recStart(); recScan(); return REC; }
+function saveResult(job, status){
+  if(!job || !job.jid) return;
+  try{
+    var r = parseLog();
+    var top = Object.keys(r.reasons).sort(function(a, b){ return r.reasons[b] - r.reasons[a]; }).slice(0, 15);
+    var reasons = {}, samples = {};
+    top.forEach(function(k){ reasons[k] = r.reasons[k]; samples[k] = r.samples[k]; });
+    localStorage.setItem(KEY_RESULT + job.jid, JSON.stringify({
+      name: job.name, range: job.useRange ? (job.start + '~' + job.end) : '전체',
+      no: job.no, of: job.of, chain: job.chain || '', markets: job.markets || [], items: job.items || [],
+      status: status, savedAt: Date.now(), processed: cursorNow(), target: targetNow(),
+      ok: r.ok, fail: r.fail, loginFail: r.login, lines: r.lines, kinds: r.kinds, reasons: reasons, samples: samples,
+      firstAt: r.firstAt, lastAt: r.lastAt
+    }));
+  }catch(e){}
+}
+// 시작되면 1분마다 '진행 중'으로 저장, 진행중→끝 전환을 보면 '완료'로 저장(반복 회차에도 계속 돈다)
+async function recordLoop(job){
+  var was = false;
+  while(true){
+    var on = startedYet();
+    if(on) saveResult(job, 'running');
+    else if(was) saveResult(job, 'done');
+    was = on;
+    await sleep(60000);
+  }
+}
+
 // 1회차 완료를 기다린 뒤, 반복 설정이 있으면 반복으로 넘긴다.
 async function runWatcher(job, head, info){
   await awaitDone();
+  saveResult(job, 'done');
   var c = countOf();
   if(parseRpt(job.rpt)) await repeatLoop(job, head, info, c);
+  else if(job.chain){
+    // ★ 전송 단계를 맡을 수도 있는 창이다 — '닫으셔도 됩니다'를 먼저 보여 주지 않는다(v1.16)
+    doneBanner(head, info, c, '🔗 전송 단계 확인 중… <b>잠시 이 창을 닫지 마세요.</b>');
+    await chainDone(job, head, info, c);
+  }
+  else if(job.then){
+    // ★ 같은 마켓의 다음 전송 창(v1.17) — 이 창이 끝난 뒤에 연다
+    var nx = job.then, nn = esc(nx.name || '다음 전송');
+    doneBanner(head, info, c, '🔗 다음 창 [' + nn + ']을 여는 중… <b>잠시 이 창을 닫지 마세요.</b>');
+    await sleep(1500);
+    var r = await openAll([Object.assign({}, nx, {jid:uid(), auto:true})]);
+    if(r.error) doneBanner(head, info, c, '⛔ 다음 창 [' + nn + ']을 열지 못했습니다 — ' + esc(r.error), '#c9302c');
+    else if(r.blocked){
+      doneBanner(head, info, c, '⛔ 팝업이 차단돼 다음 창 [' + nn + ']을 열지 못했습니다. '
+        + '<button id="tmgThenRetry" style="font:bold 12px/1.4 \'맑은 고딕\',sans-serif;padding:2px 8px;cursor:pointer">열기</button>', '#c9302c');
+      var bt = document.getElementById('tmgThenRetry');
+      if(bt) bt.addEventListener('click', async function(ev){
+        ev.stopPropagation();
+        var r2 = await openAll(r.rest);
+        doneBanner(head, info, c, r2.blocked ? '⛔ 여전히 차단됩니다 — 이 사이트의 팝업을 허용하세요.' : '🔗 다음 창 [' + nn + ']을 열었습니다. 이 창은 닫아도 됩니다.',
+          r2.blocked ? '#c9302c' : '#2e6da4');   // 끝난 창은 파랑 (v1.18.2)
+      });
+    }
+    else{ doneBanner(head, info, c, '🔗 다음 창 [' + nn + ']을 열었습니다. 이 창은 닫아도 됩니다.'); setTitle('완료·다음창'); }
+  }
   else doneBanner(head, info, c);
+}
+
+// ── ★ 업데이트 후 변동분 전송 (v1.14 이어서 실행 → v1.15 전송 방식으로 통합) ──────────
+// 전송 방식 'chg' 프리셋은 먼저 업데이트 창만 연다(마켓 없음·변동일 전체). 그 창들이 전부 끝나면
+// 마지막 창이 마켓별 전송 창을 연다(sendPlan). 밤새 사람 손 없이 '업데이트 → 바뀐 것만 전송'을 하기 위해 만들었다.
+//  · 창끼리는 localStorage(같은 출처)로만 소통한다. 그룹 하나 = KEY_CHAIN + gid.
+//  · ★ 완료 표시는 창마다 '별도 키'에 쓴다(KEY_CHAIN+gid+'_d'+no).
+//    한 레코드를 읽고-고쳐-쓰면 두 창이 거의 동시에 끝날 때 한쪽 기록이 사라지고,
+//    그러면 '전부 끝남'이 영영 성립하지 않아 B가 조용히 안 돈다.
+//  · 마지막으로 끝난 창이 전송 창을 연다. 동시에 끝난 창이 둘 다 열지 않게 '점유' 표시를 쓰고 다시 읽는다.
+//  · A의 창 하나라도 대조 실패·예약 취소·자동시작 취소로 멈추면 실패 키를 남기고 B는 열지 않는다.
+//    (A의 일부만 끝난 채 B가 돌면 변동을 다 찾기 전에 전송하는 셈이다.)
+//  · 창을 그냥 닫아 버린 경우는 알 길이 없다 — 그때는 B가 열리지 않을 뿐이다(전송 안 함 = 안전 쪽).
+//  · B의 건수는 여는 순간 다시 센다. 변동일 프리셋은 건수가 매일 바뀌므로 저장된 값을 믿으면 안 된다.
+function chainKey(g, sfx){ return KEY_CHAIN + g + (sfx || ''); }
+function chainGet(g){ try{ return JSON.parse(localStorage.getItem(chainKey(g)) || 'null'); }catch(e){ return null; } }
+function chainFail(job, reason){
+  if(!job || !job.chain) return;
+  try{ localStorage.setItem(chainKey(job.chain, '_fail'), '구간 ' + job.no + ': ' + reason); }catch(e){}
+}
+function chainDoneCount(g, total){
+  var n = 0;
+  for(var i = 1; i <= total; i++) if(localStorage.getItem(chainKey(g, '_d' + i))) n++;
+  return n;
+}
+
+async function chainDone(job, head, info, c){
+  if(!job.chain) return;
+  var g = job.chain, ch = chainGet(g);
+  function note(html, color){ doneBanner(head, info, c, html, color); }
+  if(!ch){ note('⚠ 전송 단계 정보를 찾지 못해 전송하지 않습니다.', '#c9302c'); return; }
+  // ★ 대상이 있는데 0건 처리 = 업데이트가 실제로 안 돈 것(확장 꺼짐·커서 문제 등). 그대로 전송하면 옛 값을 보낸다(v1.16 M5)
+  var tg = targetNow();
+  if(c && c.zero && tg !== null && tg > 0){
+    chainFail(job, '대상 ' + tg + '건 중 0건 처리');
+    note('⛔ 이 창이 대상 ' + tg + '건 중 한 건도 업데이트하지 못해 <b>전송 단계를 취소했습니다.</b>', '#c9302c');
+    setTitle('완료·0건·전송취소');
+    return;
+  }
+  try{ localStorage.setItem(chainKey(g, '_d' + job.no), JSON.stringify({n:c ? c.html : '', at:Date.now()})); }catch(e){}
+  var nm = '<b>[' + esc(ch.nextName) + ']</b>';
+
+  await sleep(500 + Math.floor(Math.random() * 1500));   // 동시에 끝난 창끼리 엇갈리게
+  var fail = localStorage.getItem(chainKey(g, '_fail'));
+  if(fail){ note('⛔ 다른 창이 멈춰 ' + nm + '는 열지 않습니다 — ' + esc(fail), '#c9302c'); setTitle('완료·이어서취소'); return; }
+  var n = chainDoneCount(g, ch.total);
+  if(n < ch.total){
+    note('⏳ 전송 대기 — 창 ' + n + '/' + ch.total + '개 완료. 마지막 창이 끝나면 ' + nm + '을 자동으로 시작합니다.'
+      + ' <b>이 창은 닫아도 됩니다.</b>');
+    return;
+  }
+  if(localStorage.getItem(chainKey(g, '_fired'))){ note('▶ 다른 창이 ' + nm + '를 열었습니다.'); return; }
+  var tok = uid();
+  try{ localStorage.setItem(chainKey(g, '_fired'), tok); }
+  catch(e){ note('⛔ 전송 단계 점유 표시를 쓰지 못했습니다(브라우저 저장공간) — ' + esc(e.message), '#c9302c'); return; }
+  await sleep(1500);
+  if(localStorage.getItem(chainKey(g, '_fired')) !== tok){ note('▶ 다른 창이 ' + nm + '를 열었습니다.'); return; }
+  await chainFire(ch, function(html, color){ note(html, color); });
+}
+
+// 전송 단계 — 마켓마다 창을 연다. 건수는 여는 순간 다시 센다(변동분은 매일 다르다). 0건인 창은 열지 않는다.
+//  · 변동분 = 그 마켓 등록상품 중 변동일에 바뀐 것. 순번과 무관 — 범위 밖으로 밀려난 등록상품도 계속 업데이트한다.
+//  · 미등록분 = 그 마켓 순번 구간(iv) 안의 미등록상품. 앞 상품이 삭제되면 뒤 상품이 당겨져 들어온다(빈자리 채우기).
+//    모든 구간 마켓은 구간이 [1~끝]이라 미등록 전체다. 일부 구간 마켓은 구간 경계를 상품번호로 바꿔
+//    미등록 목록(같은 순서)에서 몇 번째~몇 번째인지 세어 범위로 보낸다.
+//  · 후보 하나를 못 세면 그 후보만 건너뛰고 나머지는 보낸다(v1.16 H3 — 전에는 하나 실패로 전부 포기했다).
+async function chainFire(ch, note){
+  var nm = '<b>[' + esc(ch.nextName) + ']</b>';
+  if(!ch.plan || !ch.plan.length){ note('⛔ 전송할 마켓이 없습니다.', '#c9302c'); return; }
+  function msg(h){ note(h + ' <b>이 창을 닫지 마세요.</b>'); }
+  function preset(x, unreg){
+    return {
+      name: ch.name + ' · ' + x.t + (unreg ? ' 미등록분' : ' 변동분'),
+      site: ch.site, items: [], markets: [x.m], cmk: {},
+      chd: unreg ? '' : ch.chd,
+      cond: Object.assign({}, ch.cond || {}, {ps_market_id: unreg ? (x.m + '_no') : x.m}),
+      useRange: false, rpt: '', sch: '', skip: []
+    };
+  }
+  // ★ v1.17: 마켓마다 창 1개 — 변동분 창이 끝나면 그 창이 미등록분 창을 연다(job.then 사슬).
+  //   한 프리셋이 마켓당 1창만 쓰므로 두 프리셋이 같은 밤에 돌아도 마켓당 2창이다(강의 권고 마켓당 3창 이하).
+  var jobs = [], lines = [], fails = [], uidCache = {};
+  for(var i = 0; i < ch.plan.length; i++){
+    var x = ch.plan[i], seq = [];
+    msg('🔗 업데이트 창이 모두 끝났습니다. 전송 대상을 세는 중… (' + x.t + ', ' + (i + 1) + '/' + ch.plan.length + ')');
+    // ① 변동분
+    try{
+      var pa = preset(x, false), na = await fetchTotal(pa, msg);
+      lines.push(x.t + ' 변동분 ' + na.toLocaleString() + '건');
+      if(na > 0) seq.push(Object.assign({}, expand(pa)[0], {auto:true}));
+    }catch(e){ fails.push(x.t + ' 변동분: ' + e.message); }
+    await sleep(1200);
+    // ② 미등록분
+    try{
+      var pb = preset(x, true);
+      if(x.all){
+        var nb = await fetchTotal(pb, msg);
+        lines.push(x.t + ' 미등록 ' + nb.toLocaleString() + '건');
+        if(nb > 0) seq.push(Object.assign({}, expand(pb)[0], {auto:true}));
+      }else{
+        for(var k = 0; k < x.iv.length; k++){
+          var r = x.iv[k], a = 0, b;
+          if(r[0] > 1){
+            var key0 = 'p' + r[0];
+            uidCache[key0] = uidCache[key0] || await uidAt(ch.site, ch.cond, r[0], msg);
+            a = await countLE(ch.site, pb.cond, uidCache[key0] - 1, msg);
+          }
+          if(r[1] === null) b = (await goodsPage(ch.site, pb.cond, 1, msg)).total;
+          else{
+            var key1 = 'p' + r[1];
+            uidCache[key1] = uidCache[key1] || await uidAt(ch.site, ch.cond, r[1], msg);
+            b = await countLE(ch.site, pb.cond, uidCache[key1], msg);
+          }
+          lines.push(x.t + ' 미등록(' + ivText([r]) + ') ' + Math.max(0, b - a).toLocaleString() + '건');
+          if(b > a){
+            var jb = expand(pb)[0];
+            seq.push(Object.assign({}, jb, {auto:true, useRange:true, start:a + 1, end:b,
+              name: pb.name + ' ' + ivText([r])}));
+          }
+        }
+      }
+    }catch(e){ fails.push(x.t + ' 미등록분: ' + e.message); }
+    // 사슬로 묶는다: seq[0] → seq[1] → … (앞 창이 끝나면 다음 창을 연다). 처음 것만 지금 연다.
+    for(var q2 = seq.length - 1; q2 > 0; q2--) seq[q2 - 1] = Object.assign({}, seq[q2 - 1], {then:seq[q2]});
+    if(seq.length) jobs.push(seq[0]);
+    await sleep(1200);
+  }
+  var failHtml = fails.length ? '<br>&nbsp;&nbsp;⛔ <b>못 센 대상(보내지 않음):</b> ' + esc(fails.join(' / ')) : '';
+  if(!jobs.length){
+    note((fails.length ? '⛔ 전송 대상을 세지 못했습니다.' : '🔗 전송할 상품이 없습니다 — ' + esc(lines.join(' · '))) + failHtml,
+      fails.length ? '#c9302c' : '#2e6da4');
+    setTitle(fails.length ? '완료·전송실패' : '완료·전송없음'); return;
+  }
+  var r1 = await openAll(jobs);
+  if(r1.error){ note('⛔ ' + esc(r1.error) + failHtml, '#c9302c'); return; }
+  if(r1.blocked){
+    note('⛔ 팝업이 차단돼 전송 창 ' + r1.opened + '/' + jobs.length + '개만 열었습니다. '
+      + '<button id="tmgChainRetry" style="font:bold 12px/1.4 \'맑은 고딕\',sans-serif;padding:2px 8px;cursor:pointer">나머지 열기</button>' + failHtml, '#c9302c');
+    var bt = document.getElementById('tmgChainRetry');
+    if(bt) bt.addEventListener('click', async function(ev){
+      ev.stopPropagation();
+      var r2 = await openAll(r1.rest);
+      note((r2.blocked ? '⛔ 여전히 차단됩니다 — 이 사이트의 팝업을 허용하세요.' : '🔗 전송 창을 모두 열었습니다.') + failHtml, r2.blocked ? '#c9302c' : '#2e6da4');
+    });
+    return;
+  }
+  note('🔗 ' + nm + ' — 전송 창 ' + r1.opened + '개를 열었습니다(마켓당 1창 · 변동분이 끝나면 같은 마켓 미등록분을 이어서 엽니다). 각 창이 대조를 통과하면 스스로 시작합니다.'
+    + '<br>&nbsp;&nbsp;· ' + esc(lines.join(' · ')) + failHtml, fails.length ? '#e0a800' : '#2e6da4');   // ★ 이 창은 끝났다 → 파랑 (v1.18.2 — 전엔 초록으로 남아 진행 중처럼 보였다)
+  setTitle(fails.length ? '완료·전송일부' : '완료·전송시작');
 }
 
 function childMode(jid){
@@ -1055,6 +1455,21 @@ function childMode(jid){
   if(!raw){ banner('⚠ 런처 작업 정보를 찾지 못했습니다. 이 창은 수동으로 확인하고 쓰세요.', '#e0a800'); return; }
   var job;
   try{ job = JSON.parse(raw); }catch(e){ banner('⚠ 런처 작업 정보가 깨졌습니다.', '#e0a800'); return; }
+
+  // ★ 요청 제한 페이지로 열렸으면(검색폼 없음) 기다렸다가 다시 연다(v1.16 H3).
+  //   그대로 대조하면 '정렬 — 실제 []' 같은 엉뚱한 사유로 잠기고 그 창 몫은 조용히 빠진다.
+  if(!document.search_form){
+    var tries = (job.retry || 0) + 1;
+    if(tries <= 3 && isBlocked(document.body ? document.body.innerText : '')){
+      try{ localStorage.setItem(KEY_JOB + jid, JSON.stringify(Object.assign({}, job, {retry:tries}))); }catch(e){}
+      banner('⏳ 더망고 요청 제한 페이지가 열렸습니다. 45초 뒤 다시 엽니다… (' + tries + '/3)', '#e0a800');
+      setTimeout(function(){ location.reload(); }, 45000);
+      return;
+    }
+    chainFail(job, '검색 화면이 열리지 않음(요청 제한 또는 로그인 풀림)');
+    banner('⛔ 더망고 검색 화면이 열리지 않았습니다(요청 제한이 계속되거나 로그인이 풀렸습니다). 이 창은 시작하지 않습니다.', '#c9302c');
+    return;
+  }
 
   // ★ 자동 재시작부터 끈다 (대조 실패로 중간에 return 하더라도 꺼진 채로 남아야 한다)
   var rep = killAutoRepeat();
@@ -1073,6 +1488,7 @@ function childMode(jid){
 
   if(bad.length || rangeErr){
     var msg = '런처: 설정 대조에 실패해 시작을 잠갔습니다. 배너 내용을 확인하세요.';
+    chainFail(job, '설정 대조 실패');
     lockStart('update_start', msg);
     lockStart('update_start_limit', msg);
     var lines = bad.concat(rangeErr ? ['범위 — ' + rangeErr] : []);
@@ -1100,9 +1516,12 @@ function childMode(jid){
     + '<br>&nbsp;&nbsp;· ' + info
     + '<br>&nbsp;&nbsp;· ' + esc(hintOf(job.items, job.markets))
     + '<br>&nbsp;&nbsp;· ' + repText(rep)
-    + (parseRpt(job.rpt) ? '<br>&nbsp;&nbsp;· 🔁 끝나면 <b>' + esc(rptLabel(job.rpt)) + '</b>에 런처가 다시 시작합니다(회차마다 대조 재확인).' : ''), '#1f7a3d');
+    + (parseRpt(job.rpt) ? '<br>&nbsp;&nbsp;· 🔁 끝나면 <b>' + esc(rptLabel(job.rpt)) + '</b>에 런처가 다시 시작합니다(회차마다 대조 재확인).' : '')
+    + (job.chain ? '<br>&nbsp;&nbsp;· 🔗 모든 창이 끝나면 <b>[' + esc(job.nextName || '') + ']</b>를 자동으로 시작합니다.' : ''), '#1f7a3d');
 
+  recStart();                       // 로그 줄을 놓치지 않게 시작 전부터 지켜본다(v1.18.1)
   runWatcher(job, head, info);
+  recordLoop(job);
   if(job.auto) autoStart(job, head);
   else if(job.sched) scheduleStart(job, head, info);
 }
@@ -1126,6 +1545,53 @@ function pageOptions(name, sel, fallback){
 }
 
 function stat(m){ var s = q('#tmgLStat'); if(s) s.innerHTML = m; }
+
+// 지난 실행 결과 — 창별 요약을 시작 시각순으로. '진행 중'인데 3분 넘게 갱신이 없으면 닫힌 창으로 본다.
+function resultsHtml(){
+  var list = [];
+  try{
+    Object.keys(localStorage).forEach(function(k){
+      if(k.indexOf(KEY_RESULT) !== 0) return;
+      try{ var o = JSON.parse(localStorage.getItem(k)); o.t = parseInt(k.slice(KEY_RESULT.length, KEY_RESULT.length + 8), 36); list.push(o); }catch(e){}
+    });
+  }catch(e){}
+  if(!list.length) return '<div style="color:#888">기록이 없습니다(v1.18부터 남습니다).</div>';
+  list.sort(function(a, b){ return b.t - a.t; });
+  function tm(t){ var d = new Date(t); return (d.getMonth() + 1) + '/' + d.getDate() + ' ' + pad2(d.getHours()) + ':' + pad2(d.getMinutes()); }
+  return list.map(function(o){
+    var stale = (o.status === 'running' && Date.now() - o.savedAt > 3 * 60000);
+    var st = o.status === 'done' ? '<b style="color:#1f7a3d">완료</b>'
+           : stale ? '<b style="color:#c9302c">중단(창 닫힘 추정 · 마지막 기록 ' + tm(o.savedAt) + ')</b>'
+           : '<b style="color:#2e6da4">진행 중</b>';
+    var cnt = (o.processed != null ? '처리 ' + o.processed + (o.target != null ? '/' + o.target : '') + ' · ' : '')
+            + '성공 ' + o.ok + ' · <span style="color:' + (o.fail ? '#c9302c' : '#888') + '">실패 ' + o.fail + '</span>'
+            + (o.loginFail ? ' · <span style="color:#c9302c">로그인 실패 ' + o.loginFail + '</span>' : '');
+    // 업데이트 창: '처리'와 '업데이트 완료' 줄 수가 다르면 완료 표시 없이 지나간 상품이 있는 것이다
+    // 결과 줄 수가 처리 수보다 적으면 표시한다. v1.18.0 기록은 마지막 ~20줄만 집계돼 있으니 그렇게 안내한다.
+    var gap = (o.lines == null)
+      ? '<br>&nbsp;&nbsp;<span style="color:#888">(v1.18.0 기록 — 로그 마지막 ~20줄만 집계됨)</span>'
+      : (o.processed != null && o.processed > o.lines)
+        ? '<br>&nbsp;&nbsp;<span style="color:#c9302c">⚠ 처리 ' + o.processed + '건 중 결과 줄이 ' + o.lines + '건뿐입니다</span>' : '';
+    var rs = Object.keys(o.reasons || {}).map(function(k){
+      return '<br>&nbsp;&nbsp;· ' + esc(k) + ' <b>' + o.reasons[k] + '건</b>'
+        + ((o.samples && o.samples[k] && o.samples[k].length) ? ' <span style="color:#888">(예: ' + esc(o.samples[k].join(' / ')) + ')</span>' : '');
+    }).join('');
+    return '<div style="border-bottom:1px solid #f0f0f0;padding:3px 0">' + tm(o.t) + ' · ' + esc(o.name)
+      + (o.of ? ' · 구간 ' + o.no + '/' + o.of : '') + ' · ' + esc(o.range) + ' — ' + st + '<br>&nbsp;&nbsp;' + cnt + gap + rs + '</div>';
+  }).join('');
+}
+function chdLabelOf(v){ return v ? ('최근 ' + v + '일') : '(미선택)'; }
+
+// ★ [함께 전송] + 업데이트 항목 + 변동일 = 업데이트를 놓치는 조합 (v1.15.3 경고, 막지는 않는다).
+//   변동일이 실행 전체의 검색조건이 되어 '이미 바뀐 적 있는 상품'만 다시 읽는다.
+//   그동안 안 바뀐 상품은 수집사이트를 다시 읽지 않으니 오늘 바뀌어도 아무도 발견하지 못한다.
+//   (업데이트 항목 없이 전송만 하는 프리셋이면 '바뀐 것만 다시 보내기'라 정당하다 → 경고 안 함)
+var CHD_RISK = '함께 전송 방식에서 변동일을 고르면 그 기간에 바뀐 적 있는 상품만 업데이트합니다. '
+  + '그동안 안 바뀐 상품은 다시 읽지 않아 오늘 가격·재고가 바뀌어도 발견하지 못합니다(업데이트 누락). '
+  + '바뀐 상품만 보내려면 전송 방식을 [업데이트 먼저 → 끝나면 바뀐 상품만 전송]으로 바꾸세요.';
+function chdRisk(p){ return !p.send2 && (p.items || []).length > 0 && !!p.chd; }
+
+
 
 // 시각 선택 UI — 시/분 두 개의 셀렉트. 저장값은 'H:M' 문자열 하나로 둔다.
 // ★ 반복(rpt)과 예약(sch)이 같은 형식·같은 파서를 쓴다. pfx로 id만 갈라 준다('Rpt' / 'Sch').
@@ -1198,7 +1664,8 @@ function winWarn(){
       + WIN_DEFAULT + '창 초과를 어떻게 처리하는지(거부 / 대기 / 조용한 실패) 확인된 적이 없습니다.');
     out.push('판정은 완료 여부가 아니라 창별 [처리 N건] 배너로 하세요 — 조용한 실패는 완료처럼 보입니다.');
   }
-  if(n > 1 && anyMarkets())
+  // [업데이트 먼저] 방식이면 구간 창에는 마켓이 없다(전송은 마켓당 1창) — 이 경고는 해당 없음
+  if(n > 1 && anyMarkets() && cur.send2 !== 'chg')
     out.push('전송 마켓이 있습니다. 전송(더망고→마켓)은 창을 늘려도 리소스가 나뉘어 빨라지지 않습니다(강의 권고 1창).');
   return out;
 }
@@ -1234,9 +1701,22 @@ function chunkList(p){
   }).join('');
 }
 
+// ★ [업데이트 먼저] 방식에서는 [실행](창만 열기)을 막는다(v1.15.4).
+//   [실행]에는 확인창이 없는데, 업데이트 창을 사람이 시작해 끝나면 전송 창은 확인 없이 자동시작한다
+//   → 마켓 전송이 한 번도 확인받지 않고 나간다. 확인창이 있는 [실행+자동시작]/[실행+예약]만 쓴다.
+var RUN_OFF = '전송 방식이 [업데이트 먼저 → 끝나면 바뀐 상품만 전송]이면 [실행]은 쓸 수 없습니다. '
+  + '전송 단계가 확인 없이 자동시작하므로, 확인창이 있는 [실행+자동시작] 또는 [실행+예약]을 쓰세요.';
 function runLabel(){
   var n = expand(cur).length;
-  var b = q('#tmgLRun');     if(b) b.textContent = '실행 (' + n + '창)';
+  var b = q('#tmgLRun');
+  if(b){
+    var off = (cur.send2 === 'chg');
+    b.textContent = '실행 (' + n + '창)';
+    b.disabled = off;
+    b.title = off ? RUN_OFF : '';
+    b.style.opacity = off ? '.4' : '';
+    b.style.cursor = off ? 'not-allowed' : '';
+  }
   var a = q('#tmgLRunAuto'); if(a) a.textContent = '실행+자동시작 (' + n + '창)';
 }
 
@@ -1269,6 +1749,21 @@ function render(){
       + checkRow(MARKETS, cur.markets, 'market')
       + (cur.useRange ? '<div style="color:#888;font-size:11px;margin-top:2px">구간별로 다르게 하려면 아래 구간 목록에서 [마켓 ▾]을 누르세요.</div>' : '')
     + '</fieldset>'
+  + '<fieldset style="border:1px solid #ddd;padding:4px 6px;margin:0 0 6px"><legend style="font-size:11px">전송 방식</legend>'
+      + '<select id="tmgLSend2" style="width:100%">'
+      + '<option value=""' + (cur.send2 ? '' : ' selected') + '>업데이트하면서 함께 전송 (전체)</option>'
+      + '<option value="chg"' + (cur.send2 === 'chg' ? ' selected' : '') + '>업데이트 먼저 → 끝나면 바뀐 상품만 전송</option>'
+      + '</select>'
+      + (cur.send2 === 'chg'
+          ? '<div style="color:#2e6da4;font-size:11px;margin-top:3px;line-height:1.5">'
+            + '① 위 구간대로 <b>업데이트만</b> 합니다(마켓 전송 없음, 변동일 무관).<br>'
+            + '② 업데이트 창이 <b>모두</b> 끝나면 마켓마다 전송 창을 열어 자동시작합니다:<br>'
+            + '&nbsp;&nbsp;' + esc(planText(sendPlan(cur), '변동일 ' + chdLabelOf(cur.chd))) + '<br>'
+            + '· 변동분 = 그 마켓 <b>등록상품</b> 중 아래 <b>변동일</b>에 바뀐 것 — 구간별 마켓 구성이 그대로 지켜집니다.<br>'
+            + '· 미등록 = <b>모든 구간</b>에 들어 있는 마켓만 신규·실패분 등록을 시도합니다.<br>'
+            + '· 업데이트 창 하나라도 대조 실패·예약 취소로 멈추면 전송하지 않습니다. 반복(매일)과는 같이 쓸 수 없습니다.</div>'
+          : '<div style="color:#888;font-size:11px;margin-top:3px">밤새 돌릴 때 <b>바뀐 상품만</b> 보내려면 아래쪽을 고르세요.</div>')
+    + '</fieldset>'
   + '<fieldset style="border:1px solid #ddd;padding:4px 6px;margin:0 0 6px"><legend style="font-size:11px">검색조건 (화면에서 담기)</legend>'
       + '<div id="tmgLCondBox" style="padding:4px 6px;background:#f5f8fb;border:1px solid #dbe5ee;border-radius:4px;line-height:1.5">'
       + condBoxHtml() + '</div>'
@@ -1278,7 +1773,12 @@ function render(){
       + '수집사이트·전송마켓·업데이트항목·변동일·정렬은 <b>위 항목이 담당</b>하므로 담기에서 제외됩니다.<br>'
       + '★ 날짜는 <b>날짜검색 체크박스를 켜야</b> 적용됩니다 — 꺼진 채로 담으면 기간이 무시됩니다.</div>'
     + '</fieldset>'
-  + '<div style="margin-bottom:6px">변동일 <select id="tmgLChd">' + pageOptions('ps_chd', cur.chd, '<option value="">전체</option>') + '</select></div>'
+  + '<div style="margin-bottom:6px">' + (cur.send2 === 'chg' ? '변동일 <b>(전송 단계)</b>' : '변동일')
+      + ' <select id="tmgLChd">' + pageOptions('ps_chd', cur.chd, '<option value="">전체</option>') + '</select>'
+      + (cur.send2 === 'chg' && !cur.chd ? '<div style="color:#c9302c;font-size:11px">전송 단계 변동일을 고르세요(권장: 최근 1일). 비워 두면 실행되지 않습니다.</div>' : '')
+      + (chdRisk(cur) ? '<div style="margin-top:3px;padding:4px 6px;background:#f2dede;border:1px solid #c9302c;border-radius:4px;'
+          + 'color:#a94442;font-size:11px;line-height:1.5">⛔ <b>업데이트 누락 위험</b> — ' + esc(CHD_RISK) + '</div>' : '')
+    + '</div>'
   + '<div style="margin-bottom:6px">예약 ' + timeSelects('Sch', cur.sch, '예약 안 함 (바로 시작)', '지정 시각에 시작')
       + (parseRpt(cur.sch) ? '<div style="color:#b8860b;font-size:11px">[실행+예약]으로 열면 창이 <b>'
           + esc(hhmm(cur.sch)) + '</b>까지 기다렸다가 스스로 시작합니다.</div>' : '')
@@ -1310,8 +1810,12 @@ function render(){
       + '<button id="tmgLRunAuto" style="font-weight:bold;color:#a94442;border-color:#a94442">실행+자동시작</button>'
       + '<button id="tmgLRunSch" style="font-weight:bold;color:#8a6d0b;border-color:#8a6d0b">실행+예약</button>'
     + '</div>'
+  + (cur.send2 === 'chg' ? '<div style="color:#a94442;font-size:11px;margin-top:3px">[실행]은 꺼져 있습니다 — ' + esc(RUN_OFF) + '</div>' : '')
   + '<div style="color:#888;font-size:11px;margin-top:3px">실행 = 창만 연다 · 실행+자동시작 = 확인 후 각 창이 대조를 통과하면 '
-      + AUTO_DELAY + '초 뒤 스스로 시작 · 실행+예약 = 위 <b>예약</b> 시각까지 기다렸다가 시작</div>';
+      + AUTO_DELAY + '초 뒤 스스로 시작 · 실행+예약 = 위 <b>예약</b> 시각까지 기다렸다가 시작</div>'
+  + '<div style="margin-top:8px;border-top:1px solid #eee;padding-top:6px"><button id="tmgLRes">지난 실행 결과</button>'
+      + '<span style="color:#888;font-size:11px"> 최근 3일 · 창을 닫아도 남습니다</span>'
+      + '<div id="tmgLResBox" style="display:none;max-height:360px;overflow:auto;margin-top:4px;font-size:11px;line-height:1.5"></div></div>';
 
   bindMain();
   bindChunks();
@@ -1328,6 +1832,7 @@ function collect(clickedItem){
   cur.chd     = q('#tmgLChd').value;
   cur.rpt     = q('#tmgLRptOn').value ? (q('#tmgLRptH').value + ':' + q('#tmgLRptM').value) : '';
   cur.sch     = q('#tmgLSchOn').value ? (q('#tmgLSchH').value + ':' + q('#tmgLSchM').value) : '';
+  cur.send2   = q('#tmgLSend2') ? q('#tmgLSend2').value : (cur.send2 || '');
   cur.useRange= q('#tmgLUse').checked;
   cur.total   = parseInt(q('#tmgLTotal').value,10) || 0;
   cur.first   = parseInt(q('#tmgLFirst').value,10) || 450;
@@ -1368,6 +1873,7 @@ function confirmText(jobs, mode){
   var sets = jobs.map(function(j){ return j.markets.slice().sort().join(','); });
   var same = sets.every(function(x){ return x === sets[0]; });
   var mk = same ? (names(MARKETS, jobs[0].markets) || '없음 (업데이트만)') : '★ 구간별로 다름';
+  if(cur.send2 === 'chg') mk = '업데이트 단계에는 없음 → 끝난 뒤 마켓별 전송 (아래 전송 방식)';
   var chdEl = q('#tmgLChd');
   var chd = (chdEl && chdEl.selectedIndex >= 0) ? chdEl.options[chdEl.selectedIndex].text.trim() : '';
   var sched = (mode === 'sch');
@@ -1377,13 +1883,17 @@ function confirmText(jobs, mode){
     '· 수집사이트 : ' + nameOf(SITES, cur.site),
     '· 업데이트항목 : ' + (names(ITEMS, cur.items) || '없음 (전송만)'),
     '· 전송마켓 : ' + mk,
-    '· 변동일 : ' + (chd || '전체'),
+    '· 변동일 : ' + (chd || '전체') + (cur.send2 === 'chg' ? ' (전송 단계에만 적용 — 업데이트는 전체)' : ''),
     '· 상품상태 : ' + optText('ps_status', condStatus(cur.cond)),
     '· 검색조건 : ' + (cur.cond ? condLine(cur.cond) : '★ 담긴 조건 없음 — 좁히지 않고 전부'),
     '· 정렬 : 상품수집 날짜순(과거순)',
     '· 시작 : ' + (sched ? ('★ ' + schWhen() + ' — 그때까지 창을 열어 둬야 합니다')
                          : (AUTO_DELAY + '초 뒤 바로')),
-    '· 반복 : ' + (parseRpt(cur.rpt) ? ('★ ' + rptLabel(cur.rpt) + ' — 창을 닫을 때까지 계속 반복합니다') : '없음 (1회만)')
+    '· 반복 : ' + (parseRpt(cur.rpt) ? ('★ ' + rptLabel(cur.rpt) + ' — 창을 닫을 때까지 계속 반복합니다') : '없음 (1회만)'),
+    '· 전송 방식 : ' + (cur.send2 === 'chg'
+        ? ('★ 업데이트 먼저 → 모든 창이 끝나면 마켓별 전송 창 자동시작 (확인창 없이)\n      '
+           + planText(sendPlan(cur), '변동일 ' + chdLabelOf(cur.chd)))
+        : '업데이트하면서 함께 전송')
   ];
   if(jobs[0].useRange){
     var cnt = jobs.reduce(function(a,j){ return a + (j.end - j.start + 1); }, 0);
@@ -1400,6 +1910,7 @@ function confirmText(jobs, mode){
     lines.push('', '각 창은 설정 대조를 통과하면 ' + AUTO_DELAY + '초 뒤 스스로 시작합니다.',
       '(창마다 취소 버튼이 뜹니다. 대조에 실패한 창은 시작하지 않습니다.)');
   }
+  if(chdRisk(cur)) lines.push('', '⛔ 업데이트 누락 위험 — ' + CHD_RISK);
   var warn = winWarn();
   if(warn.length) lines.push('', '⚠ ' + warn.join('\n⚠ '));
   lines.push('', '마켓에 전송된 내용은 되돌리기 어렵습니다. 진행할까요?');
@@ -1417,9 +1928,36 @@ function schWhen(){
 }
 
 // mode: '' = 창만 열기 · 'auto' = 5초 뒤 자동시작 · 'sch' = 예약 시각에 시작
+
 async function doRun(mode){
   collect();
-  var jobs = expand(cur);
+  var two = (cur.send2 === 'chg');
+  var plan = two ? sendPlan(cur) : null;
+  if(two){
+    function no(m){ stat('<span style="color:#c9302c">' + m + '</span>'); }
+    if(parseRpt(cur.rpt)){ no('전송 방식 [업데이트 먼저 → 바뀐 상품만 전송]은 반복과 같이 쓸 수 없습니다.'); return; }
+    if(!cur.items.length){ no('업데이트 항목이 없습니다. [업데이트 먼저] 방식은 업데이트 항목이 있어야 합니다.'); return; }
+    if(!cur.chd){ no('전송 단계 <b>변동일</b>을 고르세요(권장: 최근 1일).'); return; }
+    if(!mode){ no(RUN_OFF); return; }     // 버튼을 막았지만 다른 경로로 불려도 안 돌게
+    // 전송 단계는 마켓등록여부·변동일 날짜조건을 스스로 정한다 — 담긴 조건과 겹치면 조용히 덮어쓰게 된다(v1.16 M1·M2)
+    if(cur.cond && cur.cond.ps_market_id){ no('담긴 검색조건에 <b>마켓등록여부</b>가 있습니다. [업데이트 먼저] 방식에서는 비워 주세요.'); return; }
+    if(cur.cond && cur.cond.ps_duse === '1'){ no('담긴 검색조건에 <b>날짜검색</b>이 켜져 있습니다. [업데이트 먼저] 방식에서는 꺼 주세요.'); return; }
+  }
+  // ★ 실행할 때마다 건수를 다시 센다(v1.16 H2). 저장된 총건수가 낡으면 뒤에 새로 수집된 상품이
+  //   마지막 구간 밖에 놓여 업데이트에서 빠진다. 전송 방식·변동일을 바꾼 뒤 다시 안 센 경우도 막는다.
+  if(cur.useRange){
+    stat('건수를 다시 세는 중…');
+    try{ cur.total = await fetchTotal(stage1(cur), function(h){ stat(h); }); }
+    catch(e){ stat('<span style="color:#c9302c">건수를 세지 못해 실행하지 않습니다 — ' + esc(e.message) + '</span>'); return; }
+    if(two) plan = sendPlan(cur);
+    render();
+  }
+  if(two && !plan.length){ stat('<span style="color:#c9302c">전송 마켓이 없습니다.</span>'); return; }
+  if(cur.useRange){
+    stat('검색결과 <b>' + cur.total.toLocaleString() + '</b>건 기준으로 구간을 다시 잡았습니다.');
+  }
+  // ★ [업데이트 먼저] 방식이면 이 단계의 창은 마켓 없이·변동일 전체로 연다. 변동일은 전송 단계 몫이다.
+  var jobs = expand(stage1(cur));
   if(!jobs.length){ stat('<span style="color:#c9302c">열 작업이 없습니다.</span>'); return; }
 
   if(mode === 'sch' && !parseRpt(cur.sch)){
@@ -1429,7 +1967,7 @@ async function doRun(mode){
   }
 
   if(mode){
-    if(!cur.items.length && !cur.markets.length
+    if(!two && !cur.items.length && !cur.markets.length
        && jobs.every(function(j){ return !j.markets.length; })){
       stat('<span style="color:#c9302c">업데이트 항목도 전송 마켓도 없습니다. '
          + (mode === 'sch' ? '예약할' : '자동 시작할') + ' 수 없습니다.</span>');
@@ -1443,7 +1981,21 @@ async function doRun(mode){
     });
   }
 
+  // ★ 전송 단계 그룹을 만든다(v1.15). 팝업 차단으로 일부만 열려도 그룹 총수는 '열려야 할 창' 기준이다
+  //   — 나머지를 [다시 열기]로 열면 그 창들도 같은 그룹에 완료를 적는다.
+  //   전송 계획은 지금 값으로 박아 둔다(밤사이 패널을 고쳐도 이미 띄운 작업은 바뀌지 않게).
+  if(two){
+    var gid = uid(), nn = '마켓별 변동분 전송';
+    localStorage.setItem(chainKey(gid), JSON.stringify({
+      kind:'send', nextName:nn, name:cur.name, site:cur.site, chd:cur.chd,
+      cond:cur.cond ? JSON.parse(JSON.stringify(cur.cond)) : null,
+      plan:plan, total:jobs.length, at:Date.now()
+    }));
+    jobs = jobs.map(function(j){ return Object.assign({}, j, {chain:gid, nextName:nn}); });
+  }
+
   var r = await openAll(jobs);
+  if(r.error){ stat('<span style="color:#c9302c">' + esc(r.error) + '</span>'); return; }
   pending = r.rest;
   var tail = mode === 'sch'  ? '각 창이 <b>' + esc(hhmm(cur.sch)) + '</b>까지 기다렸다가 스스로 시작합니다. '
                              + '<b>창을 닫지 마세요.</b>'
@@ -1455,7 +2007,7 @@ async function doRun(mode){
 }
 
 function bindMain(){
-  ['tmgLName','tmgLSite','tmgLChd','tmgLSchOn','tmgLSchH','tmgLSchM','tmgLRptOn','tmgLRptH','tmgLRptM',
+  ['tmgLName','tmgLSite','tmgLChd','tmgLSchOn','tmgLSchH','tmgLSchM','tmgLRptOn','tmgLRptH','tmgLRptM','tmgLSend2',
    'tmgLUse','tmgLTotal','tmgLFirst','tmgLSize','tmgLMaxWin'].forEach(function(id){
     var e = q('#' + id); if(e) e.onchange = function(){ collect(); render(); };
   });
@@ -1469,7 +2021,7 @@ function bindMain(){
   q('#tmgLCount').onclick = async function(){
     collect(); stat('건수 조회 중...');
     try{
-      cur.total = await fetchTotal(cur);
+      cur.total = await fetchTotal(stage1(cur));
       stat('검색결과 <b>' + cur.total.toLocaleString() + '</b>건 → 구간 ' + chunks(cur).length + '개');
       render();
     }catch(e){ stat('<span style="color:#c9302c">건수 조회 실패: ' + esc(e.message) + '</span>'); }
@@ -1494,11 +2046,17 @@ function bindMain(){
   q('#tmgLSave').onclick = function(){
     collect();
     var copy = JSON.parse(JSON.stringify(cur)); delete copy._open;
-    var i = store.presets.findIndex(function(p){ return p.id === cur.id; });
+    var i = -1;   // ★ 일부 관리자 화면은 Array.prototype.find류가 덮여 있다 → 루프로 찾는다
+    for(var k = 0; k < store.presets.length; k++) if(store.presets[k].id === cur.id){ i = k; break; }
     if(i < 0) store.presets.push(copy); else store.presets[i] = copy;
     save(store); head(); stat('저장했습니다.');
   };
 
+  q('#tmgLRes').onclick = function(){
+    var box = q('#tmgLResBox');
+    if(box.style.display !== 'none'){ box.style.display = 'none'; return; }
+    box.innerHTML = resultsHtml(); box.style.display = '';
+  };
   q('#tmgLRun').onclick     = function(){ doRun(''); };
   q('#tmgLRunAuto').onclick = function(){ doRun('auto'); };
   q('#tmgLRunSch').onclick  = function(){ doRun('sch'); };
@@ -1595,10 +2153,27 @@ function panel(){
 }
 
 // ────────────────────────────────────────────────────────────
+// ★ 작업·전송단계 기록 정리(v1.16 M4) — 정리 로직이 없어 계속 쌓였다(2026-08 시점 160개+).
+//   저장공간이 차면 창 열기가 조용히 실패한다. 3일 지난 것만 지운다. id 앞 8자리가 생성 시각(36진수)이다.
+function pruneOld(){
+  var cut = Date.now() - 3 * 24 * 3600 * 1000, n = 0;
+  try{
+    Object.keys(localStorage).forEach(function(k){
+      var id = null;
+      if(k.indexOf(KEY_JOB) === 0) id = k.slice(KEY_JOB.length);
+      else if(k.indexOf(KEY_CHAIN) === 0) id = k.slice(KEY_CHAIN.length);
+      else if(k.indexOf(KEY_RESULT) === 0) id = k.slice(KEY_RESULT.length);
+      if(!id) return;
+      var t = parseInt(id.slice(0, 8), 36);
+      if(t > 1e12 && t < cut){ localStorage.removeItem(k); n++; }
+    });
+  }catch(e){}
+  return n;
+}
 function boot(){
   var m = (location.hash || '').match(/tmglauncher=([a-z0-9]+)/i);
   if(m) childMode(m[1]);   // 런처가 연 창 — 대조·범위주입(·자동시작)만 하고 패널은 띄우지 않는다
-  else  panel();
+  else { pruneOld(); panel(); }
 }
 if(document.readyState === 'complete') boot(); else window.addEventListener('load', boot);
 })();
