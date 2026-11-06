@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         더망고 카테고리매핑 단계형 파일기반(수집→Claude매핑→적용)
 // @namespace    solddeul.tmg
-// @version      2.2
+// @version      2.3
 // @description  단계형 카테고리매핑을 "규칙 자동선택"이 아니라 "파일 기반 결정론"으로 처리. ① 수집(Export): 마켓별 신발·의류 카테고리 전체(카탈로그: 경로+코드+구분) + 리프(매핑대상)를 엑셀로 내려받음. ② 매핑: Claude가 그 엑셀을 받아 규칙대로 각 리프×마켓에 카탈로그 경로를 채움. ③ 적용(Apply): 매핑 엑셀을 불러오면 카탈로그로 경로→코드를 해석해 리프마다 설정페이지에서 주입·고시·저장(fetch-POST)·되읽기 검증. 규칙이 매크로에서 빠져 Claude 판단으로 이동 → 신상품마다 정규식 손볼 필요 없음.
 // @match        https://tmg4682.mycafe24.com/mall/admin/admin_category_new.php*
 // @match        https://tmg4682.mycafe24.com/mall/admin/admin_category_set.php*
@@ -65,7 +65,7 @@ var ACC_JUNK=/신발장|정리함|수납|주머니|골프백|가방|백팩|에�
 // 토큰 단위 매칭(짧은 어휘의 부분일치 오탐 방지: '시뮬레이션'의 뮬, '샤워커튼'의 워커, '부츠컷'의 부츠)
 function tokens(seg){ return String(seg).split(/[\s/·,()>\[\]&・\-]+/).filter(Boolean); }
 var FOOT_WORD=/화$|슈즈|신발|부츠$|부티|샌들|슬리퍼|슬립온|로퍼|힐$|하이힐|펌프스|^플랫(슈즈|폼)?$|플랫$|^워커|워커$|더비|구두|^뮬$|뮬$|블로퍼|모카신|옥스[퍼포]드|스니커|아쿠아슈즈|^아쿠아$|장화|크록스|덧신|니하이|싸이하이|^조리$|쪼리|플립플[랍롭]|웨지|토오픈|슬링백|에스파드|발레리나|메리제인|웰트화|shoes?$|boots?$|sneakers?|sandals?|loafers?|heels?$|pumps?$|flats?$|mules?$|oxfords?|derby|slippers?|clogs?|espadrille/i;
-var APPAREL_WORD=/^의류$|의류$|^상의$|^하의$|상하의|아우터|티셔츠|티셔트|반팔|긴팔|셔츠|남방|블라우스|니트|스웨터|가디건|카디건|풀오버|후드|맨투맨|스웻|트레이닝복|운동복|자켓|재킷|점퍼|블루종|패딩|덕다운|구스다운|코트$|조끼|베스트$|플리스|후리스|바지|팬츠|슬랙스|데님|스커트|치마|원피스|점프수트|레깅스|^정장$|정장바지|수트$|슈트$|민소매|나시|셋업|무스탕|모피|홈웨어|잠옷|파자마|래쉬가드|집업|숏패딩|롱패딩|tshirts?$|t-shirts?$|shirts?$|blouse|knit|sweater|cardigan|hoodie|sweatshirt|jackets?$|coats?$|vest$|fleece|pants$|trousers|jeans|shorts$|skirts?$|dress(es)?$|leggings|outerwear|jumper/i;
+var APPAREL_WORD=/^의류$|의류$|^상의$|^하의$|상하의|아우터|티셔츠|티셔트|반팔|긴팔|셔츠|남방|블라우스|니트|스웨터|가디건|카디건|풀오버|후드|맨투맨|스웻|트레이닝복|운동복|자켓|재킷|점퍼|블루종|패딩|덕다운|구스다운|코트$|조끼|베스트$|플리스|후리스|바지|팬츠|슬랙스|데님|스커트|치마|원피스|점프수트|레깅스|^정장$|정장바지|수트$|슈트$|민소매|나시|셋업|무스탕|모피|홈웨어|잠옷|파자마|래쉬가드|집업|숏패딩|롱패딩|^탑$|드레스$|tshirts?$|t-shirts?$|shirts?$|blouse|knit|sweater|cardigan|hoodie|sweatshirt|jackets?$|coats?$|vest$|fleece|pants$|trousers|jeans|shorts$|skirts?$|dress(es)?$|leggings|outerwear|jumper/i;
 function anyWord(re, segs){ for(var i=0;i<segs.length;i++){ var tk=tokens(segs[i]); for(var j=0;j<tk.length;j++){ if(re.test(tk[j])) return true; } } return false; }
 var ELEVEN_OVERSEAS=/해외/;   // ★단계형(ABC=국내 사업자): 11번가는 국내 카테고리여야 함 — 경로에 '해외'가 있으면 규칙위반
 function leafSeg(t){ return (String(t).split('>').pop()||'').trim(); }
@@ -114,6 +114,14 @@ async function postText(url, body, ctype){
 }
 function shortOf(full){ var s=String(full||''); while(s.length>3 && s.slice(-3)==='000') s=s.slice(0,-3); return s; }
 function normName(n){ if(/^MEN$/i.test(n)||/남성/.test(n)) return '남성'; if(/^WOMEN$/i.test(n)||/여성/.test(n)) return '여성'; return n; }
+// v2.3: 사이트 전체가 한 성별인 곳은 트리에 성별 노드가 없어 리프가 전부 '공용'으로 잡힌다(IDF몰 = 여성복, 트리는 브랜드 > 대분류 > 중분류).
+//       → 리프 경로명 앞에 그 성별을 붙인다. 사이트 이름은 #setCateCd1 표시명.
+var SITE_GENDER=[[/IDFMall/i,'여성']];
+function siteGenderOf(siteShort){
+  var s=listSites().filter(function(x){ return x.short===siteShort; })[0]; if(!s) return '';
+  for(var i=0;i<SITE_GENDER.length;i++){ if(SITE_GENDER[i][0].test(s.name)) return SITE_GENDER[i][1]; }
+  return '';
+}
 function genderOf(name){ return name.indexOf('여성')>=0?'여성':(name.indexOf('남성')>=0?'남성':'공용'); }
 
 // ★11번가 국내/해외: select와 별개인 라디오(seller_type2)가 저장폼의 실제 타입을 결정. 사용자가 패널에서 고른 종류를 수집·적용·평가 전 단계에 일관 적용.
@@ -143,8 +151,8 @@ async function enumerateLeaves(siteShort){
     if(!kids.length){ if(!seen[node.full]){ seen[node.full]=1; leaves.push({ id:node.full, name:pathNames.join(' ') }); } return; }
     for(var i=0;i<kids.length;i++){ await dfs(kids[i], pathNames.concat(normName(kids[i].name))); }
   }
-  var roots=await catGetChildren(siteShort);
-  for(var i=0;i<roots.length;i++){ await dfs(roots[i], [normName(roots[i].name)]); }
+  var roots=await catGetChildren(siteShort); var sg=siteGenderOf(siteShort);   // v2.3
+  for(var i=0;i<roots.length;i++){ await dfs(roots[i], (sg?[sg]:[]).concat(normName(roots[i].name))); }
   return leaves;
 }
 async function leafInfo(leafFull){
