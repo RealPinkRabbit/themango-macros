@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         더망고 상품수집 자동 반복 (엑셀 연동) v3
 // @namespace    solddeul.tmg
-// @version      3.0
+// @version      3.1
 // @description  엑셀(.xlsx)에서 필터/URL을 직접 읽어 더망고 신규상품 수집을 순차 자동 등록. 하드코딩 없이 엑셀만 수정하면 됨. URL검색이 페이지를 리로드하므로 phase(search/save)를 저장해 로드에 걸쳐 진행하고, 완료 로그로 판정.
 // @match        https://tmg4682.mycafe24.com/mall/admin/shop/getGoods.php*
 // @require      https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js
@@ -15,8 +15,8 @@ var LS_RUN='tmg_auto_v3';       // 실행 상태(진행중/phase/index)
 var LS_DATA='tmg_data_v3';      // 엑셀에서 불러온 데이터
 var LS_BW='tmg_banword_v3';     // 선택된 금지어 템플릿 value(리로드 넘어 유지)
 
-var SITE_LABEL={a_rt:'ABC마트', zara_de:'독일자라', zara_kr:'자라KR', musinsa:'무신사', ebay:'eBay'};
-var LABEL_TO_CODE={'ABC마트':'a_rt','독일자라':'zara_de','자라KR':'zara_kr','ZaraKR':'zara_kr','Zara KR':'zara_kr','무신사':'musinsa','MUSINSA':'musinsa','eBay':'ebay','ebay':'ebay'};
+var SITE_LABEL={a_rt:'ABC마트', zara_de:'독일자라', zara_kr:'자라KR', musinsa:'무신사', ebay:'eBay', idfmall_kr:'IDF몰'};
+var LABEL_TO_CODE={'ABC마트':'a_rt','독일자라':'zara_de','자라KR':'zara_kr','ZaraKR':'zara_kr','Zara KR':'zara_kr','무신사':'musinsa','MUSINSA':'musinsa','eBay':'ebay','ebay':'ebay','IDF몰':'idfmall_kr'};
 
 function gs(){ try{return JSON.parse(localStorage.getItem(LS_RUN))||{};}catch(e){return {};} }
 function ss(s){ localStorage.setItem(LS_RUN, JSON.stringify(s)); }
@@ -63,6 +63,7 @@ function siteCode(label,url){
   if(/zara\.com\/kr/.test(url)) return 'zara_kr';
   if(url.indexOf('musinsa')>=0) return 'musinsa';
   if(url.indexOf('ebay')>=0) return 'ebay';
+  if(url.indexOf('idfmall')>=0) return 'idfmall_kr';
   return null;
 }
 function parseWorkbook(wb){
