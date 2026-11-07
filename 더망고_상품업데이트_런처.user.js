@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         더망고 상품업데이트 런처
 // @namespace    solddeul.tmg
-// @version      1.18.2
+// @version      1.19.0
 // @description  상품업데이트&마켓전송 화면의 설정(수집사이트/업데이트항목/전송마켓/변동일/범위)을 프리셋으로 저장해 두고, 범위를 구간으로 나눠 여러 창을 한꺼번에 띄운다. v1.6부터 구간은 최대 5개다(동시 5창 한도) — 1~4구간은 지정한 크기대로 끊고 5번째가 남은 전량을 맡는다. v1.7에 [실행+예약]을 추가했다 — 창을 미리 열어 두고 프리셋의 '예약' 시각이 되면 대조를 다시 한 뒤 스스로 시작한다. 구간마다 전송마켓을 따로 지정할 수 있다. 새로 열린 창은 프리셋과 실제 화면을 대조해 일치할 때만 시작 버튼을 열어 준다. [실행]은 창만 열고 사람이 시작을 누르며, [실행+자동시작]은 확인창 1회를 거쳐 각 창이 대조 통과 후 스스로 시작한다. v1.4부터 런처가 연 창에서는 더망고의 auto_repeat(자동 재시작)을 끈다. v1.5부터는 반복이 필요하면 런처가 직접 한다 — 프리셋에 '매일 HH:MM'을 지정하면 완료를 감지해 그 시각에 대조를 다시 하고 시작 버튼을 누른다. ★v1.9에서 반복 2회차가 늘 0건으로 끝나던 버그를 고쳤다 — 더망고의 회차 커서 초기화가 auto_repeat 블록 안에 들어 있어, v1.4가 반복을 끄면서 초기화까지 같이 꺼져 있었다. 시작 직전에 런처가 커서를 대신 되돌리고, 회차가 0건으로 끝나면 배너와 탭 제목으로 드러낸다. ★v1.10에서 화면의 상세 검색조건(검색유형+검색어·마켓등록여부·날짜검색·상품상태·통화·가격/상품번호 범위 등)을 프리셋에 담을 수 있게 했다 — [현재 화면 조건 담기] 한 번이면 되고, 건수조회·구간분할·예약·반복·대조가 모두 그 조건을 따른다. 같은 수집사이트를 두 사업자가 나눠 쓰는 경우(검색필터명 검색으로 구분) 때문에 필요해졌다. ★v1.11에서 v1.6이 5로 고정했던 구간(창) 수 상한을 프리셋에서 정할 수 있게 했다 — 기본 5, 최대 10. 5를 넘기면 패널과 확인창에 경고가 붙는다(더망고가 5창 초과를 어떻게 처리하는지는 아직 확인된 적이 없다).
 // @match        https://tmg4682.mycafe24.com/mall/admin/admin_goods_update.php*
 // @run-at       document-idle
@@ -167,7 +167,7 @@ var AUTO_DELAY = 5;
 var KEY_STORE = 'tmg_update_launcher_v1';
 var KEY_JOB   = 'tmg_update_job_';
 var KEY_CHAIN = 'tmg_update_chain_';   // 이어서 실행 그룹 (v1.14)
-var KEY_RESULT = 'tmg_update_result_'; // 창별 실행 결과 요약 (v1.18)
+var KEY_RESULT = 'tmg_update_result_'; // v1.18 결과 기록의 남은 키 — v1.19에서 기능 제거, 정리(pruneOld)에만 쓴다
 var PAGE      = location.pathname.replace(/[^/]+$/,'') + 'admin_goods_update.php';
 
 function q(s){ return document.querySelector(s); }
@@ -1176,101 +1176,9 @@ async function repeatLoop(job, head, info, last){
   }
 }
 
-// ── ★ 실행 결과 기록 (v1.18) ──────────────────────────────────
-// 창마다 로그(#layer_page)를 요약해 localStorage에 남긴다 — 창을 닫아도, 다른 탭에서 실행했어도
-// 아침에 한 곳(패널 [지난 실행 결과])에서 볼 수 있게. 1분마다 '진행 중'으로, 끝나면 '완료'로 덮어쓴다.
-// 그래서 중간에 닫힌 창은 마지막 '진행 중' 기록이 남는다(닫힌 시각 ≈ 마지막 기록 시각).
-// 로그 한 줄 형식(실측): [번호] [YYYYMMDD HH:MM:SS] [종류] [마켓|사이트] [계정] [상품번호] 이름 → 결과
-// ★ v1.18.1: 더망고는 로그를 최근 ~20줄만 남기고 앞쪽을 지운다(2026-11-03 실측 — v1.18 기록이 창마다
-//   '성공 19'처럼 마지막 19~20줄만 집계됐다). 그래서 화면을 가끔 읽지 않고, 로그에 줄이 붙을 때마다
-//   (MutationObserver) 새 줄만 골라 누적한다. 같은 줄은 내용(번호·시각 포함)으로 한 번만 센다.
-function newRec(){ return {ok:0, fail:0, login:0, lines:0, kinds:{}, reasons:{}, samples:{}, firstAt:'', lastAt:'', seen:{}, order:[]}; }
-function parseLine(r, line){
-  var m = line.match(/\[(\d{8} \d{2}:\d{2}:\d{2})\]\s*\[([^\]]+)\]\s*(.*?)→\s*(.*)$/);
-  if(!m) return;
-  var kind = m[2], headTxt = m[3];
-  var res = m[4].replace(/\[?FAQ[^\]]*\]?\([^)]*\)/g, '').replace(/FAQ 바로가기/g, '').replace(/https?:\S+/g, '').replace(/\s+/g, ' ').trim();
-  if(kind === '마켓로그인체크'){ if(!/성공/.test(res)) r.login++; return; }
-  r.lines++;
-  var brs = headTxt.match(/\[[^\]]*\]/g) || [];
-  var where = (kind === '마켓전송' && brs[0]) ? brs[0].slice(1, -1) : '';
-  var key = kind + (where ? ' · ' + where : '');
-  var k = r.kinds[key] = r.kinds[key] || {ok:0, fail:0};
-  if(!r.firstAt) r.firstAt = m[1];
-  r.lastAt = m[1];
-  if(/완료/.test(res) && !/실패|불가|초과|없습니다/.test(res)){ k.ok++; r.ok++; return; }
-  k.fail++; r.fail++;
-  // ★ v1.18.2: 상품마다 다른 번호(이미지 id·옵션 id·상품번호)를 지워야 같은 사유가 한 줄로 묶인다
-  //   (11/06 11번가 이미지 오류 93건이 번호 때문에 1건씩 흩어졌다). 4자리 이하(예: 한도 5000, 지재권 코드)는 남긴다.
-  var rk = key + ' | ' + res.replace(/\[\d{5,}[^\]]*\]/g, '[#]').replace(/\d{5,}/g, '#').slice(0, 90);
-  r.reasons[rk] = (r.reasons[rk] || 0) + 1;
-  var sm = r.samples[rk] = r.samples[rk] || [];
-  if(sm.length < 2){
-    var u = headTxt.match(/\[(\d{5,})\]/);
-    sm.push((u ? u[1] + ' ' : '') + headTxt.replace(/\[[^\]]*\]/g, '').trim().slice(0, 30));
-  }
-}
-var REC = null;
-function recScan(){
-  var el = document.getElementById('layer_page');
-  if(!el || !REC) return;
-  var txt = el.innerText || '';
-  var lines = txt.indexOf('\n') >= 0 ? txt.split('\n') : (el.textContent || '').split(/(?=\.{6}\[)/);
-  for(var i = 0; i < lines.length; i++){
-    var ln = lines[i].trim();
-    if(ln.indexOf('→') < 0 || REC.seen[ln]) continue;
-    REC.seen[ln] = 1; REC.order.push(ln);
-    if(REC.order.length > 600) delete REC.seen[REC.order.shift()];   // 화면에 남는 줄보다 넉넉히만 기억
-    parseLine(REC, ln);
-  }
-}
-function recStart(){
-  if(REC) return;
-  REC = newRec();
-  var el = document.getElementById('layer_page');
-  if(el && window.MutationObserver){
-    var pend = false;
-    new MutationObserver(function(){
-      if(pend) return; pend = true;
-      Promise.resolve().then(function(){ pend = false; recScan(); });
-    }).observe(el, {childList:true, subtree:true, characterData:true});
-  }
-  recScan();
-}
-// 하위호환: 예전 이름. 누적값을 돌려준다.
-function parseLog(){ recStart(); recScan(); return REC; }
-function saveResult(job, status){
-  if(!job || !job.jid) return;
-  try{
-    var r = parseLog();
-    var top = Object.keys(r.reasons).sort(function(a, b){ return r.reasons[b] - r.reasons[a]; }).slice(0, 15);
-    var reasons = {}, samples = {};
-    top.forEach(function(k){ reasons[k] = r.reasons[k]; samples[k] = r.samples[k]; });
-    localStorage.setItem(KEY_RESULT + job.jid, JSON.stringify({
-      name: job.name, range: job.useRange ? (job.start + '~' + job.end) : '전체',
-      no: job.no, of: job.of, chain: job.chain || '', markets: job.markets || [], items: job.items || [],
-      status: status, savedAt: Date.now(), processed: cursorNow(), target: targetNow(),
-      ok: r.ok, fail: r.fail, loginFail: r.login, lines: r.lines, kinds: r.kinds, reasons: reasons, samples: samples,
-      firstAt: r.firstAt, lastAt: r.lastAt
-    }));
-  }catch(e){}
-}
-// 시작되면 1분마다 '진행 중'으로 저장, 진행중→끝 전환을 보면 '완료'로 저장(반복 회차에도 계속 돈다)
-async function recordLoop(job){
-  var was = false;
-  while(true){
-    var on = startedYet();
-    if(on) saveResult(job, 'running');
-    else if(was) saveResult(job, 'done');
-    was = on;
-    await sleep(60000);
-  }
-}
-
 // 1회차 완료를 기다린 뒤, 반복 설정이 있으면 반복으로 넘긴다.
 async function runWatcher(job, head, info){
   await awaitDone();
-  saveResult(job, 'done');
   var c = countOf();
   if(parseRpt(job.rpt)) await repeatLoop(job, head, info, c);
   else if(job.chain){
@@ -1519,9 +1427,7 @@ function childMode(jid){
     + (parseRpt(job.rpt) ? '<br>&nbsp;&nbsp;· 🔁 끝나면 <b>' + esc(rptLabel(job.rpt)) + '</b>에 런처가 다시 시작합니다(회차마다 대조 재확인).' : '')
     + (job.chain ? '<br>&nbsp;&nbsp;· 🔗 모든 창이 끝나면 <b>[' + esc(job.nextName || '') + ']</b>를 자동으로 시작합니다.' : ''), '#1f7a3d');
 
-  recStart();                       // 로그 줄을 놓치지 않게 시작 전부터 지켜본다(v1.18.1)
   runWatcher(job, head, info);
-  recordLoop(job);
   if(job.auto) autoStart(job, head);
   else if(job.sched) scheduleStart(job, head, info);
 }
@@ -1546,40 +1452,6 @@ function pageOptions(name, sel, fallback){
 
 function stat(m){ var s = q('#tmgLStat'); if(s) s.innerHTML = m; }
 
-// 지난 실행 결과 — 창별 요약을 시작 시각순으로. '진행 중'인데 3분 넘게 갱신이 없으면 닫힌 창으로 본다.
-function resultsHtml(){
-  var list = [];
-  try{
-    Object.keys(localStorage).forEach(function(k){
-      if(k.indexOf(KEY_RESULT) !== 0) return;
-      try{ var o = JSON.parse(localStorage.getItem(k)); o.t = parseInt(k.slice(KEY_RESULT.length, KEY_RESULT.length + 8), 36); list.push(o); }catch(e){}
-    });
-  }catch(e){}
-  if(!list.length) return '<div style="color:#888">기록이 없습니다(v1.18부터 남습니다).</div>';
-  list.sort(function(a, b){ return b.t - a.t; });
-  function tm(t){ var d = new Date(t); return (d.getMonth() + 1) + '/' + d.getDate() + ' ' + pad2(d.getHours()) + ':' + pad2(d.getMinutes()); }
-  return list.map(function(o){
-    var stale = (o.status === 'running' && Date.now() - o.savedAt > 3 * 60000);
-    var st = o.status === 'done' ? '<b style="color:#1f7a3d">완료</b>'
-           : stale ? '<b style="color:#c9302c">중단(창 닫힘 추정 · 마지막 기록 ' + tm(o.savedAt) + ')</b>'
-           : '<b style="color:#2e6da4">진행 중</b>';
-    var cnt = (o.processed != null ? '처리 ' + o.processed + (o.target != null ? '/' + o.target : '') + ' · ' : '')
-            + '성공 ' + o.ok + ' · <span style="color:' + (o.fail ? '#c9302c' : '#888') + '">실패 ' + o.fail + '</span>'
-            + (o.loginFail ? ' · <span style="color:#c9302c">로그인 실패 ' + o.loginFail + '</span>' : '');
-    // 업데이트 창: '처리'와 '업데이트 완료' 줄 수가 다르면 완료 표시 없이 지나간 상품이 있는 것이다
-    // 결과 줄 수가 처리 수보다 적으면 표시한다. v1.18.0 기록은 마지막 ~20줄만 집계돼 있으니 그렇게 안내한다.
-    var gap = (o.lines == null)
-      ? '<br>&nbsp;&nbsp;<span style="color:#888">(v1.18.0 기록 — 로그 마지막 ~20줄만 집계됨)</span>'
-      : (o.processed != null && o.processed > o.lines)
-        ? '<br>&nbsp;&nbsp;<span style="color:#c9302c">⚠ 처리 ' + o.processed + '건 중 결과 줄이 ' + o.lines + '건뿐입니다</span>' : '';
-    var rs = Object.keys(o.reasons || {}).map(function(k){
-      return '<br>&nbsp;&nbsp;· ' + esc(k) + ' <b>' + o.reasons[k] + '건</b>'
-        + ((o.samples && o.samples[k] && o.samples[k].length) ? ' <span style="color:#888">(예: ' + esc(o.samples[k].join(' / ')) + ')</span>' : '');
-    }).join('');
-    return '<div style="border-bottom:1px solid #f0f0f0;padding:3px 0">' + tm(o.t) + ' · ' + esc(o.name)
-      + (o.of ? ' · 구간 ' + o.no + '/' + o.of : '') + ' · ' + esc(o.range) + ' — ' + st + '<br>&nbsp;&nbsp;' + cnt + gap + rs + '</div>';
-  }).join('');
-}
 function chdLabelOf(v){ return v ? ('최근 ' + v + '일') : '(미선택)'; }
 
 // ★ [함께 전송] + 업데이트 항목 + 변동일 = 업데이트를 놓치는 조합 (v1.15.3 경고, 막지는 않는다).
@@ -1812,10 +1684,7 @@ function render(){
     + '</div>'
   + (cur.send2 === 'chg' ? '<div style="color:#a94442;font-size:11px;margin-top:3px">[실행]은 꺼져 있습니다 — ' + esc(RUN_OFF) + '</div>' : '')
   + '<div style="color:#888;font-size:11px;margin-top:3px">실행 = 창만 연다 · 실행+자동시작 = 확인 후 각 창이 대조를 통과하면 '
-      + AUTO_DELAY + '초 뒤 스스로 시작 · 실행+예약 = 위 <b>예약</b> 시각까지 기다렸다가 시작</div>'
-  + '<div style="margin-top:8px;border-top:1px solid #eee;padding-top:6px"><button id="tmgLRes">지난 실행 결과</button>'
-      + '<span style="color:#888;font-size:11px"> 최근 3일 · 창을 닫아도 남습니다</span>'
-      + '<div id="tmgLResBox" style="display:none;max-height:360px;overflow:auto;margin-top:4px;font-size:11px;line-height:1.5"></div></div>';
+      + AUTO_DELAY + '초 뒤 스스로 시작 · 실행+예약 = 위 <b>예약</b> 시각까지 기다렸다가 시작</div>';
 
   bindMain();
   bindChunks();
@@ -2052,11 +1921,6 @@ function bindMain(){
     save(store); head(); stat('저장했습니다.');
   };
 
-  q('#tmgLRes').onclick = function(){
-    var box = q('#tmgLResBox');
-    if(box.style.display !== 'none'){ box.style.display = 'none'; return; }
-    box.innerHTML = resultsHtml(); box.style.display = '';
-  };
   q('#tmgLRun').onclick     = function(){ doRun(''); };
   q('#tmgLRunAuto').onclick = function(){ doRun('auto'); };
   q('#tmgLRunSch').onclick  = function(){ doRun('sch'); };
