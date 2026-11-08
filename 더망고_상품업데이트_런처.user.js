@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         더망고 상품업데이트 런처
 // @namespace    solddeul.tmg
-// @version      1.20.0
-// @description  상품업데이트&마켓전송 화면의 설정(수집사이트/업데이트항목/전송마켓/변동일/범위)을 프리셋으로 저장해 두고, 범위를 구간으로 나눠 여러 창을 한꺼번에 띄운다. v1.6부터 구간은 최대 5개다(동시 5창 한도) — 1~4구간은 지정한 크기대로 끊고 5번째가 남은 전량을 맡는다. v1.7에 [실행+예약]을 추가했다 — 창을 미리 열어 두고 프리셋의 '예약' 시각이 되면 대조를 다시 한 뒤 스스로 시작한다. 구간마다 전송마켓을 따로 지정할 수 있다. 새로 열린 창은 프리셋과 실제 화면을 대조해 일치할 때만 시작 버튼을 열어 준다. [실행]은 창만 열고 사람이 시작을 누르며, [실행+자동시작]은 확인창 1회를 거쳐 각 창이 대조 통과 후 스스로 시작한다. v1.4부터 런처가 연 창에서는 더망고의 auto_repeat(자동 재시작)을 끈다. v1.5부터는 반복이 필요하면 런처가 직접 한다 — 프리셋에 '매일 HH:MM'을 지정하면 완료를 감지해 그 시각에 대조를 다시 하고 시작 버튼을 누른다. ★v1.9에서 반복 2회차가 늘 0건으로 끝나던 버그를 고쳤다 — 더망고의 회차 커서 초기화가 auto_repeat 블록 안에 들어 있어, v1.4가 반복을 끄면서 초기화까지 같이 꺼져 있었다. 시작 직전에 런처가 커서를 대신 되돌리고, 회차가 0건으로 끝나면 배너와 탭 제목으로 드러낸다. ★v1.10에서 화면의 상세 검색조건(검색유형+검색어·마켓등록여부·날짜검색·상품상태·통화·가격/상품번호 범위 등)을 프리셋에 담을 수 있게 했다 — [현재 화면 조건 담기] 한 번이면 되고, 건수조회·구간분할·예약·반복·대조가 모두 그 조건을 따른다. 같은 수집사이트를 두 사업자가 나눠 쓰는 경우(검색필터명 검색으로 구분) 때문에 필요해졌다. ★v1.11에서 v1.6이 5로 고정했던 구간(창) 수 상한을 프리셋에서 정할 수 있게 했다 — 기본 5, 최대 10. 5를 넘기면 패널과 확인창에 경고가 붙는다(더망고가 5창 초과를 어떻게 처리하는지는 아직 확인된 적이 없다). ★v1.20에서 무인 서버용 기능을 '이 브라우저 = 무인 서버' 스위치 안에 넣었다(기본 꺼짐 — 꺼져 있으면 v1.19와 같다): 창별 실행 결과 기록(v1.18.2 코드, 7일 보관·1MB 상한)과 [지난 실행 결과], 10분마다 로그인 확인(세션 끊김 표시·기록).
+// @version      1.21.1
+// @description  상품업데이트&마켓전송 화면의 설정(수집사이트/업데이트항목/전송마켓/변동일/범위)을 프리셋으로 저장해 두고, 범위를 구간으로 나눠 여러 창을 한꺼번에 띄운다. v1.6부터 구간은 최대 5개다(동시 5창 한도) — 1~4구간은 지정한 크기대로 끊고 5번째가 남은 전량을 맡는다. v1.7에 [실행+예약]을 추가했다 — 창을 미리 열어 두고 프리셋의 '예약' 시각이 되면 대조를 다시 한 뒤 스스로 시작한다. 구간마다 전송마켓을 따로 지정할 수 있다. 새로 열린 창은 프리셋과 실제 화면을 대조해 일치할 때만 시작 버튼을 열어 준다. [실행]은 창만 열고 사람이 시작을 누르며, [실행+자동시작]은 확인창 1회를 거쳐 각 창이 대조 통과 후 스스로 시작한다. v1.4부터 런처가 연 창에서는 더망고의 auto_repeat(자동 재시작)을 끈다. v1.5부터는 반복이 필요하면 런처가 직접 한다 — 프리셋에 '매일 HH:MM'을 지정하면 완료를 감지해 그 시각에 대조를 다시 하고 시작 버튼을 누른다. ★v1.9에서 반복 2회차가 늘 0건으로 끝나던 버그를 고쳤다 — 더망고의 회차 커서 초기화가 auto_repeat 블록 안에 들어 있어, v1.4가 반복을 끄면서 초기화까지 같이 꺼져 있었다. 시작 직전에 런처가 커서를 대신 되돌리고, 회차가 0건으로 끝나면 배너와 탭 제목으로 드러낸다. ★v1.10에서 화면의 상세 검색조건(검색유형+검색어·마켓등록여부·날짜검색·상품상태·통화·가격/상품번호 범위 등)을 프리셋에 담을 수 있게 했다 — [현재 화면 조건 담기] 한 번이면 되고, 건수조회·구간분할·예약·반복·대조가 모두 그 조건을 따른다. 같은 수집사이트를 두 사업자가 나눠 쓰는 경우(검색필터명 검색으로 구분) 때문에 필요해졌다. ★v1.11에서 v1.6이 5로 고정했던 구간(창) 수 상한을 프리셋에서 정할 수 있게 했다 — 기본 5, 최대 10. 5를 넘기면 패널과 확인창에 경고가 붙는다(더망고가 5창 초과를 어떻게 처리하는지는 아직 확인된 적이 없다). ★v1.20에서 무인 서버용 기능을 '이 브라우저 = 무인 서버' 스위치 안에 넣었다(기본 꺼짐 — 꺼져 있으면 v1.19와 같다): 창별 실행 결과 기록(v1.18.2 코드, 7일 보관·1MB 상한)과 [지난 실행 결과], 10분마다 로그인 확인(세션 끊김 표시·기록). ★v1.21에서 같은 스위치 안에 '매일 자동 실행'을 넣었다 — 프리셋마다 시각·순서를 정하면 패널 탭이 매일 그 시각에 [실행+자동시작]과 같은 경로로(확인창만 빼고) 연다. 하루 1회·유예 2시간·시작 직전 로그인 확인·창 한도(같은 사이트 업데이트 5창, 마켓별 전송 3창) 검사, 패널 탭이 여럿이면 하나만 실행. 끝난 창은 30분 뒤 스스로 닫힌다. v1.21.1: '시작중·시작함' 기록을 IndexedDB(strict)에도 남겨, 크롬이 갑자기 꺼져 localStorage 기록이 사라져도 같은 날 다시 돌지 않는다.
 // @match        https://tmg4682.mycafe24.com/mall/admin/admin_goods_update.php*
 // @run-at       document-idle
 // @grant        none
@@ -1323,6 +1323,7 @@ async function runWatcher(job, head, info){
     else{ doneBanner(head, info, c, '🔗 다음 창 [' + nn + ']을 열었습니다. 이 창은 닫아도 됩니다.'); setTitle('완료·다음창'); }
   }
   else doneBanner(head, info, c);
+  if(!parseRpt(job.rpt)) closeLater();   // v1.21 — 서버에서만, 결과를 남긴 끝난 창은 30분 뒤 닫는다
 }
 
 // ── ★ 업데이트 후 변동분 전송 (v1.14 이어서 실행 → v1.15 전송 방식으로 통합) ──────────
@@ -1568,7 +1569,8 @@ function pageOptions(name, sel, fallback){
   }).join('');
 }
 
-function stat(m){ var s = q('#tmgLStat'); if(s) s.innerHTML = m; }
+var STAT_LOG = null;   // v1.21 — 무인 실행 중에는 상태 문구를 모아 실패 사유로 쓴다
+function stat(m){ var s = q('#tmgLStat'); if(s) s.innerHTML = m; if(STAT_LOG) STAT_LOG.push(String(m).replace(/<[^>]+>/g, '').trim()); }
 
 
 // ────────────────────────────────────────────────────────────
@@ -1619,6 +1621,284 @@ function resultsHtml(){
       + (s.bad ? ' · <span style="color:#c9302c">문제 창 ' + s.bad + '</span>' : '') + '</div>'
       + g.map(one).join('');
   }).join('');
+}
+
+// ────────────────────────────────────────────────────────────
+// ★ 매일 자동 실행 (B1, v1.21, 2026-11-08) — serverOn()일 때만 돈다
+// ────────────────────────────────────────────────────────────
+//  · 프리셋 필드: daily('' = 안 함 / 'H:M' = 매일 그 시각), dOrd(같은 시각 안의 순서), dSince(켜거나 시각을 바꾼 시각 —
+//    그 전 회차는 '놓침'으로 치지 않는다). 필드가 없는 기존 프리셋 = 자동 실행 안 함.
+//  · 패널 탭이 30초마다 본다. 패널 탭이 여럿이면(크롬 재시작 때 복원된 옛 작업 탭도 패널로 다시 뜬다) 리더 하나만 실행한다.
+//  · 회차마다 기록(tmg_daily_runs_v1, 14일)을 '시작중'으로 먼저 쓰고 연다 → 도중에 크롬이 죽어도 같은 날 다시 돌지 않는다.
+//  · 예정 시각 + 유예 2시간 안이면 실행(늦으면 늦은 만큼 기록), 넘으면 '놓침'으로 기록만 한다.
+//  · 시작 직전 로그인 확인 — 정상일 때만. 끊김·요청 제한·확인 불가면 기록만 남기고 다음 틱에 다시(유예 안에서).
+//  · 창 한도(정적 합산, 자동 실행 대상 전체 · 순서대로): 같은 사이트 업데이트 창 상한 합 ≤ 5, 마켓별 전송 창 합 ≤ 3.
+//    넘기는 프리셋은 건너뛰고 기록한다. 반복(매일)이 켜진 프리셋도 건너뛴다(이중 실행).
+//  · 실행은 doRun('auto', {preset, unattended}) — [실행+자동시작]과 같은 경로, 확인창만 없다.
+var KEY_DAILY_LEASE = 'tmg_daily_lease_v1';
+var KEY_DAILY_RUNS  = 'tmg_daily_runs_v1';
+var DAILY_TICK_MS   = 30 * 1000;
+var DAILY_LEASE_MS  = 3 * 60 * 1000;      // 리더가 이만큼 갱신을 멈추면 다른 패널 탭이 넘겨받는다(백그라운드 탭은 1분까지 늦어진다)
+var DAILY_GRACE_MS  = 2 * 3600 * 1000;    // 예정 시각을 이만큼 넘기면 실행하지 않는다
+var DAILY_KEEP_DAYS = 14;
+var DAILY_GAP_MS    = 5000;               // 같은 시각 프리셋 사이 간격
+var DAILY_UPD_MAX   = WIN_DEFAULT;        // 같은 수집사이트 업데이트 창 합계 상한(강의 3-35)
+var DAILY_SEND_MAX  = 3;                  // 마켓별 전송 창 합계 상한(강의 3-35)
+var DAILY_FINAL     = {starting:1, started:1, failed:1, skipped:1, missed:1};   // 이 상태면 그 회차는 끝(다시 안 돈다)
+var CLOSE_AFTER_MS  = 30 * 60 * 1000;
+var TAB_ID = uid();
+var dailyTimer = null, dailyBusy = false, dailyIsLeader = false;
+
+function ymdOfDate(d){ return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()); }
+function dailyGet(){ try{ return JSON.parse(localStorage.getItem(KEY_DAILY_RUNS) || '{}') || {}; }catch(e){ return {}; } }
+function dailySet(day, pid, rec){
+  var o = dailyGet();
+  (o[day] = o[day] || {})[pid] = rec;
+  var cut = ymdOfDate(new Date(Date.now() - DAILY_KEEP_DAYS * 86400000));
+  Object.keys(o).forEach(function(k){ if(k < cut) delete o[k]; });
+  try{ localStorage.setItem(KEY_DAILY_RUNS, JSON.stringify(o)); }catch(e){}
+}
+// 지금 기준 가장 최근의 예정 회차(오늘 시각이 아직이면 어제 회차). 자정을 넘는 유예도 이걸로 맞는다.
+function dailySlot(p, now){
+  var t = parseRpt(p && p.daily); if(!t) return null;
+  var d = new Date(now); d.setHours(t.h, t.m, 0, 0);
+  if(d.getTime() > now) d.setDate(d.getDate() - 1);
+  return {day: ymdOfDate(d), at: d.getTime()};
+}
+function dailyDecide(p, now, runs){
+  var s = dailySlot(p, now); if(!s) return null;
+  if(p.dSince && s.at < p.dSince) return null;                 // 켜기 전 회차
+  var r = runs[s.day] && runs[s.day][p.id];
+  if(r && DAILY_FINAL[r.state]) return null;
+  if(now - s.at > DAILY_GRACE_MS) return {act:'miss', slot:s, prev:r || null};
+  return {act:'run', slot:s, late: now - s.at};
+}
+// 자동 실행 대상 — 시각 → 순서 → 목록 순
+function dailyPresets(){
+  var ps = load().presets || [], out = [];
+  for(var i = 0; i < ps.length; i++) if(parseRpt(ps[i].daily)) out.push({p:ps[i], i:i});
+  out.sort(function(a, b){
+    var ta = parseRpt(a.p.daily), tb = parseRpt(b.p.daily);
+    return (ta.h * 60 + ta.m) - (tb.h * 60 + tb.m) || (a.p.dOrd || 0) - (b.p.dOrd || 0) || a.i - b.i;
+  });
+  return out.map(function(x){ return x.p; });
+}
+// 프리셋 하나가 쓰는 창(보수적으로 상한 기준) — {upd:n, send:{마켓:n}}
+function dailyLoad(p){
+  var upd = p.useRange ? maxWinOf(p) : 1, send = {};
+  function add(m){ send[m] = (send[m] || 0) + 1; }
+  if(p.send2 === 'chg'){
+    var all = {};   // [업데이트 먼저] = 마켓당 1창
+    (p.markets || []).forEach(function(m){ all[m] = 1; });
+    Object.keys(p.cmk || {}).forEach(function(k){ (p.cmk[k] || []).forEach(function(m){ all[m] = 1; }); });
+    Object.keys(all).forEach(add);
+  }else if(p.useRange){
+    for(var no = 1; no <= upd; no++) chunkMarkets(p, no).forEach(add);   // [함께 전송] = 구간 창마다 그 마켓에 보낸다
+  }else (p.markets || []).forEach(add);
+  return {upd:upd, send:send};
+}
+// 순서대로 쌓다가 한도를 넘기는 프리셋은 빼고 사유를 붙인다 → {프리셋id: '' 또는 사유}
+function dailyAllowed(list){
+  var upd = {}, send = {}, out = {};
+  list.forEach(function(p){
+    if(parseRpt(p.rpt)){ out[p.id] = '반복(매일)이 켜져 있음 — 자동 실행과 같이 쓰면 두 번 돈다'; return; }
+    var L = dailyLoad(p), why = [];
+    var u = (upd[p.site] || 0) + L.upd;
+    if(u > DAILY_UPD_MAX) why.push(nameOf(SITES, p.site) + ' 업데이트 창 ' + u + '개(한도 ' + DAILY_UPD_MAX + ')');
+    Object.keys(L.send).forEach(function(m){
+      var n = (send[m] || 0) + L.send[m];
+      if(n > DAILY_SEND_MAX) why.push(nameOf(MARKETS, m) + ' 전송 창 ' + n + '개(한도 ' + DAILY_SEND_MAX + ')');
+    });
+    if(why.length){ out[p.id] = '창 한도 초과 — ' + why.join(', '); return; }
+    upd[p.site] = u;
+    Object.keys(L.send).forEach(function(m){ send[m] = (send[m] || 0) + L.send[m]; });
+    out[p.id] = '';
+  });
+  return out;
+}
+function dailyLease(now){
+  var l = null; try{ l = JSON.parse(localStorage.getItem(KEY_DAILY_LEASE) || 'null'); }catch(e){}
+  if(l && l.tab !== TAB_ID && now - l.t < DAILY_LEASE_MS) return false;
+  try{ localStorage.setItem(KEY_DAILY_LEASE, JSON.stringify({tab:TAB_ID, t:now})); }catch(e){ return false; }
+  return true;
+}
+function dailyLeaseMine(){
+  try{ var l = JSON.parse(localStorage.getItem(KEY_DAILY_LEASE) || 'null'); return !!l && l.tab === TAB_ID; }catch(e){ return false; }
+}
+function dailyRec(p, d, state, extra){
+  var rec = Object.assign({state:state, name:p.name, at:Date.now(), plan:hhmm(p.daily),
+    late: Math.max(0, Date.now() - d.slot.at)}, extra || {});
+  dailySet(d.slot.day, p.id, rec);
+  return rec;
+}
+// ★ 하루 1회의 두 번째 자물쇠 — IndexedDB(durability 'strict' = 디스크에 쓴 뒤 완료)
+//   2026-11-08 서버 실측: 크롬을 멈추기 약 30초 전에 저장한 localStorage 값이 디스크에 안 남았다
+//   (localStorage는 모아서 늦게 쓰고, 종료 때 다 쓰지 못할 수 있다). 시작 직후 크롬이 죽으면 '시작중' 기록이
+//   사라져 유예 안에서 다시 돌 수 있다 → 마켓 중복 전송. 그래서 '시작중'·'시작함'은 여기에도 적고, 실행 전에 여기부터 본다.
+//   IndexedDB를 못 쓰는 환경이면 조용히 localStorage만으로 동작한다(노드 시험·옛 브라우저).
+var DAILY_IDB = 'tmg_daily_v1';
+function idbOpen(){
+  return new Promise(function(res, rej){
+    if(typeof indexedDB === 'undefined'){ rej(new Error('no indexedDB')); return; }
+    var r = indexedDB.open(DAILY_IDB, 1);
+    r.onupgradeneeded = function(){ r.result.createObjectStore('runs'); };
+    r.onsuccess = function(){ res(r.result); };
+    r.onerror = function(){ rej(r.error); };
+  });
+}
+function idbTx(mode, fn){
+  return idbOpen().then(function(db){
+    return new Promise(function(res, rej){
+      var tx = db.transaction('runs', mode, mode === 'readwrite' ? {durability:'strict'} : undefined), out;
+      var st = tx.objectStore('runs');
+      out = fn(st);
+      tx.oncomplete = function(){ db.close(); res(out && 'result' in out ? out.result : true); };
+      tx.onerror = tx.onabort = function(){ db.close(); rej(tx.error); };
+    });
+  });
+}
+function idbKey(day, pid){ return day + '|' + pid; }
+async function idbGetRun(day, pid){ try{ return (await idbTx('readonly', function(st){ return st.get(idbKey(day, pid)); })) || null; }catch(e){ return null; } }
+async function idbPutRun(day, pid, rec){
+  var cut = ymdOfDate(new Date(Date.now() - DAILY_KEEP_DAYS * 86400000));
+  try{
+    await idbTx('readwrite', function(st){ st.delete(IDBKeyRange.upperBound(cut, true)); st.put(rec, idbKey(day, pid)); });
+    return true;
+  }catch(e){ return false; }
+}
+// 한 번 본다. 반환값은 시험용(무엇을 했는지).
+async function dailyStep(now){
+  if(dailyBusy || !serverOn()) return 'busy';
+  dailyIsLeader = dailyLease(now);
+  if(!dailyIsLeader) return 'follower';
+  var list = dailyPresets(), runs = dailyGet(), ok = dailyAllowed(list), due = [];
+  list.forEach(function(p){
+    var d = dailyDecide(p, now, runs); if(!d) return;
+    if(d.act === 'miss'){
+      dailyRec(p, d, 'missed', {why:'예정 ' + hhmm(p.daily) + '에서 유예 ' + Math.round(DAILY_GRACE_MS / 3600000) + '시간이 지나도록 시작하지 못함'
+        + (d.prev && d.prev.why ? ' — 마지막 사유: ' + d.prev.why : ' — 그동안 이 브라우저(패널 탭)가 꺼져 있었거나 멈춰 있었다')});
+    }else due.push({p:p, d:d});
+  });
+  if(!due.length) return 'idle';
+  dailyBusy = true;
+  try{
+    await sleep(500 + Math.floor(Math.random() * 1000));      // 두 탭이 동시에 리더를 잡은 경우 — 다시 읽어 확인
+    if(!dailyLeaseMine()) return 'lost-lease';
+    var h = await loginCheck(false); healthPut(h); healthShow();
+    if(h.state !== 'ok'){
+      var why = h.state === 'lost' ? '세션 끊김(' + (h.note || '') + ') — VNC로 다시 로그인하면 유예 안에서 다시 시도'
+              : (h.state === 'limit' ? '요청 제한' : '로그인 확인 불가(' + (h.note || '') + ')') + ' — 다음 확인 때 다시 시도';
+      due.forEach(function(x){ dailyRec(x.p, x.d, h.state === 'lost' ? 'login' : 'wait', {why:why}); });
+      return 'login-' + h.state;
+    }
+    for(var i = 0; i < due.length; i++){
+      var x = due[i];
+      if(!serverOn() || !dailyLeaseMine()) return 'stopped';
+      if(ok[x.p.id]){ dailyRec(x.p, x.d, 'skipped', {why:ok[x.p.id]}); continue; }
+      var hard = await idbGetRun(x.d.slot.day, x.p.id);         // localStorage 기록이 사라졌어도 여기 남아 있으면 이미 돈 것
+      if(hard && DAILY_FINAL[hard.state]){
+        dailySet(x.d.slot.day, x.p.id, Object.assign({}, hard, {why:(hard.why ? hard.why + ' / ' : '') + '브라우저 저장소 기록이 사라져 IndexedDB 기록으로 되살림 — 다시 실행하지 않음'}));
+        continue;
+      }
+      var claim = dailyRec(x.p, x.d, 'starting');              // ★ 먼저 적는다 — 하루 1회
+      var hardOk = await idbPutRun(x.d.slot.day, x.p.id, claim);
+      var res = await dailyRun(x.p);
+      var fin = dailyRec(x.p, x.d, res && res.ok ? 'started' : 'failed',
+        {opened: res ? res.opened : 0, total: res ? res.total : 0,
+         why: (res ? (res.why || '') : '') + (hardOk ? '' : (res && res.why ? ' / ' : '') + 'IndexedDB 기록 실패(localStorage만)')});
+      if(hardOk) await idbPutRun(x.d.slot.day, x.p.id, fin);
+      if(i < due.length - 1) await sleep(DAILY_GAP_MS);
+    }
+    return 'ran';
+  }finally{ dailyBusy = false; dailyShow(); }
+}
+// 패널의 현재 편집 상태(cur)를 지키며 doRun을 돌린다. 중간에 멈추면 마지막 상태 문구를 사유로 돌려준다.
+async function dailyRun(p){
+  collect();                                                  // 화면에서 고치던 값을 cur에 걷어 둔다
+  var keep = cur, log = STAT_LOG = [];
+  var res;
+  try{
+    cur = JSON.parse(JSON.stringify(p));
+    cur.items = normalizeItems(cur.items);
+    res = await doRun('auto', {preset:true, unattended:true});
+  }catch(e){ res = {ok:false, opened:0, total:0, why:'오류: ' + (e && e.message || e)}; }
+  finally{ STAT_LOG = null; cur = keep; render(); }
+  if(!res) res = {ok:false, opened:0, total:0, why: log.length ? log[log.length - 1] : '실행하지 않음(사유 없음)'};
+  stat('매일 자동 실행 [' + esc(p.name) + '] — ' + (res.ok ? '창 ' + res.opened + '개를 열었습니다.' : '<span style="color:#c9302c">' + esc(res.why) + '</span>'));
+  return res;
+}
+async function dailyTick(){
+  dailyTimer = null;
+  if(!serverOn()) return;
+  try{ await dailyStep(Date.now()); }catch(e){}
+  dailyShow();
+  dailyTimer = setTimeout(dailyTick, DAILY_TICK_MS);
+}
+function dailyStart(){ if(serverOn() && !dailyTimer && !dailyBusy) dailyTimer = setTimeout(dailyTick, 3000); }
+function dailyStop(){ if(dailyTimer){ clearTimeout(dailyTimer); dailyTimer = null; } }
+
+var DAILY_STATE = {starting:['#a07800','시작중(끝까지 못 감)'], started:['#1f7a3d','시작함'], failed:['#c9302c','실패'],
+  skipped:['#c9302c','건너뜀'], missed:['#c9302c','놓침'], login:['#c9302c','로그인 끊김'], wait:['#a07800','대기(다시 시도)']};
+function dailyStateHtml(r){
+  if(!r) return '<span style="color:#888">아직</span>';
+  var m = DAILY_STATE[r.state] || ['#888', r.state], d = new Date(r.at);
+  return '<span style="color:' + m[0] + ';font-weight:bold">' + m[1] + '</span> ' + pad2(d.getHours()) + ':' + pad2(d.getMinutes())
+    + (r.state === 'started' ? ' · 창 ' + r.opened + '/' + r.total : '')
+    + (r.late > 60000 ? ' · ' + leftOf(r.late) + ' 늦음' : '')
+    + (r.why ? ' · ' + esc(r.why) : '');
+}
+function dailyHtml(){
+  var list = dailyPresets();
+  if(!list.length) return '<span style="color:#888">매일 자동 실행: 지정된 프리셋 없음</span>';
+  var runs = dailyGet(), ok = dailyAllowed(list), now = Date.now();
+  return '<b>매일 자동 실행 ' + list.length + '개</b> <span style="color:#888">· ' + (dailyIsLeader ? '이 탭이 실행 담당' : '다른 탭이 실행 담당(또는 확인 전)') + '</span>'
+    + list.map(function(p){
+        var s = dailySlot(p, now), r = s && runs[s.day] && runs[s.day][p.id];
+        var fresh = p.dSince && s && s.at < p.dSince;           // 켜기 전 회차 = 다음 회차부터
+        return '<div>· ' + esc(hhmm(p.daily)) + ' #' + (p.dOrd || 0) + ' ' + esc(p.name) + ' — '
+          + (ok[p.id] ? '<span style="color:#c9302c">⛔ ' + esc(ok[p.id]) + '</span>'
+             : (fresh ? '<span style="color:#888">다음 ' + esc(hhmm(p.daily)) + '부터</span>' : (s ? s.day.slice(5) + ' ' : '') + dailyStateHtml(r)))
+          + '</div>';
+      }).join('');
+}
+function dailyShow(){ var e = q('#tmgLDaily'); if(e) e.innerHTML = dailyHtml(); }
+function dailyRecHtml(){
+  var o = dailyGet(), days = Object.keys(o).sort().reverse().slice(0, 7);
+  if(!days.length) return '<span style="color:#888">기록 없음</span>';
+  return days.map(function(d){
+    return '<div style="margin-top:3px"><b>' + d + '</b></div>' + Object.keys(o[d]).map(function(id){
+      var r = o[d][id];
+      return '<div>&nbsp;· ' + esc(r.plan || '') + ' ' + esc(r.name || id) + ' — ' + dailyStateHtml(r) + '</div>';
+    }).join('');
+  }).join('');
+}
+function dailyRowHtml(){
+  var t = parseRpt(cur.daily);
+  var warn = [];
+  if(t && parseRpt(cur.rpt)) warn.push('반복(매일)과 같이 쓸 수 없습니다 — 자동 실행에서 건너뜁니다.');
+  if(t && parseRpt(cur.sch)) warn.push('자동 실행은 예약 시각을 쓰지 않고 위 시각에 바로 시작합니다.');
+  return '<div style="margin-bottom:6px;padding:4px 6px;background:#eef6ee;border:1px solid #b9dcb9;border-radius:4px">'
+    + '<b>매일 자동</b> ' + timeSelects('Daily', cur.daily, '자동 실행 안 함', '매일 자동 실행')
+    + ' 순서 <input id="tmgLDOrd" type="number" value="' + (parseInt(cur.dOrd, 10) || 0) + '" style="width:40px">'
+    + '<div style="color:#2e6da4;font-size:11px;line-height:1.5">'
+    + (t ? '이 브라우저(무인 서버)가 매일 <b>' + esc(hhmm(cur.daily)) + '</b>에 [실행+자동시작]처럼 <b>확인창 없이</b> 엽니다. <b>저장</b>해야 적용됩니다. 켜거나 시각을 바꾼 날은 저장한 뒤의 회차부터 셉니다.'
+         : '켜면 이 브라우저가 매일 그 시각에 확인창 없이 실행합니다(무인 서버 전용).')
+    + '</div>'
+    + (warn.length ? '<div style="color:#c9302c;font-size:11px">⚠ ' + warn.map(esc).join('<br>⚠ ') + '</div>' : '')
+    + '</div>';
+}
+function dailySaveNote(p){
+  var w = dailyAllowed(dailyPresets())[p.id];
+  return w ? '<span style="color:#c9302c">⚠ 매일 자동 실행에서 건너뛰게 됩니다 — ' + esc(w) + '</span>'
+           : '매일 ' + esc(hhmm(p.daily)) + ' 자동 실행에 들어갔습니다.';
+}
+// 끝난 창 정리(서버만) — 결과는 이미 기록했다. 사람이 눌러야 할 버튼이 남았거나 다시 돌고 있으면 둔다.
+function closeLater(){
+  if(!serverOn()) return;
+  setTimeout(function(){
+    if(!serverOn() || document.getElementById('tmgChainRetry') || document.getElementById('tmgThenRetry') || startedYet()) return;
+    try{ window.close(); }catch(e){}
+  }, CLOSE_AFTER_MS);
 }
 
 // ── 로그인 확인 (B2) ──
@@ -1676,8 +1956,10 @@ function serverBoxHtml(){
   return '<label style="font-weight:bold"><input type="checkbox" id="tmgLSrv"' + (on ? ' checked' : '') + '> 이 브라우저 = 무인 서버</label>'
     + '<span style="color:#888;font-size:11px"> (이 브라우저에만 저장 · 켜면 결과 기록·로그인 확인)</span>'
     + (on ? '<div id="tmgLHealth" style="margin-top:3px">' + healthHtml() + '</div>'
+      + '<div id="tmgLDaily" style="margin-top:3px">' + dailyHtml() + '</div>'
       + '<div style="margin-top:3px"><button id="tmgLChk">로그인 확인 지금</button> <button id="tmgLSelf">판별 시험</button> '
-      + '<button id="tmgLRes">지난 실행 결과</button></div>'
+      + '<button id="tmgLRes">지난 실행 결과</button> <button id="tmgLDRec">자동 실행 기록</button></div>'
+      + '<div id="tmgLDRecBox" style="display:none;max-height:260px;overflow:auto;margin-top:4px;font-size:11px;line-height:1.5"></div>'
       + '<div id="tmgLSelfOut" style="font-size:11px;margin-top:2px"></div>'
       + '<div id="tmgLResBox" style="display:none;max-height:360px;overflow:auto;margin-top:4px;font-size:11px;line-height:1.5"></div>' : '');
 }
@@ -1686,8 +1968,8 @@ function bindServer(){
   box.innerHTML = serverBoxHtml();
   q('#tmgLSrv').onchange = function(){
     setServer(this.checked);
-    if(this.checked) healthStart(); else { healthStop(); setTitle(''); }
-    bindServer();
+    if(this.checked){ healthStart(); dailyStart(); } else { healthStop(); dailyStop(); setTitle(''); }
+    bindServer(); render();
     stat(this.checked ? '무인 서버로 표시했습니다 — 이 브라우저에서 연 창부터 결과가 기록됩니다.' : '무인 서버 표시를 껐습니다(v1.19와 같은 동작).');
   };
   if(!serverOn()) return;
@@ -1698,6 +1980,11 @@ function bindServer(){
     o.innerHTML = r.state === 'lost'
       ? '<span style="color:#1f7a3d">판별 시험 통과 — 쿠키 없는 요청을 \'세션 끊김\'(' + esc(r.note || '') + ')으로 판정. 실제 세션은 그대로입니다.</span>'
       : '<span style="color:#c9302c">판별 시험 실패 — 쿠키 없는 요청이 \'' + esc(r.state) + '\'(' + esc(r.note || '') + ')로 판정됐습니다.</span>';
+  };
+  q('#tmgLDRec').onclick = function(){
+    var b = q('#tmgLDRecBox');
+    if(b.style.display !== 'none'){ b.style.display = 'none'; return; }
+    b.innerHTML = dailyRecHtml(); b.style.display = '';
   };
   q('#tmgLRes').onclick = function(){
     var b = q('#tmgLResBox');
@@ -1913,6 +2200,7 @@ function render(){
       + (parseRpt(cur.rpt) ? '<div style="color:#2e6da4;font-size:11px">창이 열려 있는 동안 매일 '
           + esc(hhmm(cur.rpt)) + '에 다시 시작합니다.</div>' : '')
     + '</div>'
+  + (serverOn() ? dailyRowHtml() : '')
   + '<div style="margin-bottom:6px;color:#555">정렬: <b>상품수집 날짜순(과거순)</b> 고정</div>'
   + '<fieldset style="border:1px solid #ddd;padding:4px 6px;margin:0 0 6px"><legend style="font-size:11px">범위 분할</legend>'
       + '<label><input type="checkbox" id="tmgLUse"' + (cur.useRange?' checked':'') + '> 사용</label>'
@@ -1956,6 +2244,10 @@ function collect(clickedItem){
   cur.rpt     = q('#tmgLRptOn').value ? (q('#tmgLRptH').value + ':' + q('#tmgLRptM').value) : '';
   cur.sch     = q('#tmgLSchOn').value ? (q('#tmgLSchH').value + ':' + q('#tmgLSchM').value) : '';
   cur.send2   = q('#tmgLSend2') ? q('#tmgLSend2').value : (cur.send2 || '');
+  if(q('#tmgLDailyOn')){   // v1.21 — 서버 스위치가 켜져 있을 때만 화면에 있다(없으면 저장값을 그대로 둔다)
+    cur.daily = q('#tmgLDailyOn').value ? (q('#tmgLDailyH').value + ':' + q('#tmgLDailyM').value) : '';
+    cur.dOrd  = parseInt(q('#tmgLDOrd').value, 10) || 0;
+  }
   cur.useRange= q('#tmgLUse').checked;
   cur.total   = parseInt(q('#tmgLTotal').value,10) || 0;
   cur.first   = parseInt(q('#tmgLFirst').value,10) || 450;
@@ -2052,8 +2344,11 @@ function schWhen(){
 
 // mode: '' = 창만 열기 · 'auto' = 5초 뒤 자동시작 · 'sch' = 예약 시각에 시작
 
-async function doRun(mode){
-  collect();
+// ★ v1.21: opts = {preset, unattended} — 매일 자동 실행 전용. opts가 없으면 v1.20과 같다.
+//   preset이 있으면 화면을 읽지 않고(collect 생략) 그 프리셋으로, unattended면 확인창만 건너뛴다.
+//   반환값 = {ok, opened, total, blocked, why} (중간에 멈추면 undefined — 사유는 STAT_LOG)
+async function doRun(mode, opts){
+  if(!(opts && opts.preset)) collect();
   var two = (cur.send2 === 'chg');
   var plan = two ? sendPlan(cur) : null;
   if(two){
@@ -2096,7 +2391,7 @@ async function doRun(mode){
          + (mode === 'sch' ? '예약할' : '자동 시작할') + ' 수 없습니다.</span>');
       return;
     }
-    if(!confirm(confirmText(jobs, mode))){
+    if(!(opts && opts.unattended) && !confirm(confirmText(jobs, mode))){
       stat(mode === 'sch' ? '예약을 취소했습니다.' : '자동 시작을 취소했습니다.'); return;
     }
     jobs = jobs.map(function(j){
@@ -2118,7 +2413,7 @@ async function doRun(mode){
   }
 
   var r = await openAll(jobs);
-  if(r.error){ stat('<span style="color:#c9302c">' + esc(r.error) + '</span>'); return; }
+  if(r.error){ stat('<span style="color:#c9302c">' + esc(r.error) + '</span>'); return {ok:false, opened:r.opened, total:jobs.length, why:r.error}; }
   pending = r.rest;
   var tail = mode === 'sch'  ? '각 창이 <b>' + esc(hhmm(cur.sch)) + '</b>까지 기다렸다가 스스로 시작합니다. '
                              + '<b>창을 닫지 마세요.</b>'
@@ -2127,11 +2422,13 @@ async function doRun(mode){
   stat((r.blocked ? '<span style="color:#c9302c">팝업이 차단됐습니다. 이 사이트의 팝업을 허용한 뒤 아래 버튼을 누르세요.</span><br>' : '')
     + '창 ' + r.opened + '개를 열었습니다. ' + tail);
   renderPending();
+  return {ok: !r.blocked && r.opened === jobs.length, opened:r.opened, total:jobs.length, blocked:r.blocked,
+          why: r.blocked ? ('팝업 차단 — ' + r.opened + '/' + jobs.length + '창만 열림') : ''};
 }
 
 function bindMain(){
   ['tmgLName','tmgLSite','tmgLChd','tmgLSchOn','tmgLSchH','tmgLSchM','tmgLRptOn','tmgLRptH','tmgLRptM','tmgLSend2',
-   'tmgLUse','tmgLTotal','tmgLFirst','tmgLSize','tmgLMaxWin'].forEach(function(id){
+   'tmgLUse','tmgLTotal','tmgLFirst','tmgLSize','tmgLMaxWin','tmgLDailyOn','tmgLDailyH','tmgLDailyM','tmgLDOrd'].forEach(function(id){
     var e = q('#' + id); if(e) e.onchange = function(){ collect(); render(); };
   });
   qa('#tmgLBody input[data-kind=item],#tmgLBody input[data-kind=market]').forEach(function(e){
@@ -2171,8 +2468,12 @@ function bindMain(){
     var copy = JSON.parse(JSON.stringify(cur)); delete copy._open;
     var i = -1;   // ★ 일부 관리자 화면은 Array.prototype.find류가 덮여 있다 → 루프로 찾는다
     for(var k = 0; k < store.presets.length; k++) if(store.presets[k].id === cur.id){ i = k; break; }
+    var was = i < 0 ? '' : (store.presets[i].daily || '');
+    if((copy.daily || '') !== was) copy.dSince = copy.daily ? Date.now() : 0;   // v1.21 — 켜거나 시각을 바꾼 순간부터 센다
     if(i < 0) store.presets.push(copy); else store.presets[i] = copy;
-    save(store); head(); stat('저장했습니다.');
+    save(store); head(); cur.dSince = copy.dSince;
+    stat('저장했습니다.' + (serverOn() && parseRpt(copy.daily) ? ' ' + dailySaveNote(copy) : ''));
+    dailyShow();
   };
 
   q('#tmgLRun').onclick     = function(){ doRun(''); };
@@ -2271,6 +2572,7 @@ function panel(){
   head(); render();
   bindServer();
   healthStart();
+  dailyStart();
 }
 
 // ────────────────────────────────────────────────────────────
